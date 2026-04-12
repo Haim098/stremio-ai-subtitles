@@ -1,0 +1,26 @@
+{
+  "name": "stremio-ai-subtitles",
+  "version": "1.0.0",
+  "description": "Stremio add-on that generates AI-powered subtitles using Gemini 3 Flash Preview",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "subtitles",
+    "ai",
+    "gemini"
+  ],
+  "author": "AI Subtitles Community",
+  "license": "MIT",
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

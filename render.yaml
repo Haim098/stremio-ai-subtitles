@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: stremio-ai-subtitles
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GEMINI_API_KEY
+        value: AIzaSyDQLmPD2Rlyjk2NI4aEr_q1TUhs-wTPejI
+      - key: NODE_ENV
+        value: production
