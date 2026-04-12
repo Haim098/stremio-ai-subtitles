@@ -1,124 +1,202 @@
 /**
- * Gemini API integration for AI subtitle generation.
- * Uses Gemini 3 Flash Preview to generate contextual SRT subtitles.
+ * Gemini API integration v2.1 — Real Subtitle Translation
+ * ========================================================
+ * Translates existing SRT subtitle text using Gemini 3 Flash Preview.
+ * Processes text in large batches with retry logic for rate limits.
  */
 
 const fetch = require('node-fetch');
 const config = require('./config');
 
 /**
- * Build the prompt for subtitle generation
+ * Build the translation prompt for a batch of subtitle lines
  */
-function buildSubtitlePrompt(title, type, lang, season, episode) {
-  const langInfo = config.SUPPORTED_LANGUAGES.find(l => l.code === lang);
-  const langName = langInfo ? langInfo.name : 'English';
-  const langDisplay = langInfo ? langInfo.displayName : 'English';
+function buildTranslationPrompt(textLines, targetLang) {
+  const langInfo = config.SUPPORTED_LANGUAGES.find(l => l.code === targetLang);
+  const langName = langInfo ? langInfo.name : 'Hebrew';
+  const langDisplay = langInfo ? langInfo.displayName : 'עברית';
 
-  let contentDesc = '';
-  if (type === 'series' && season && episode) {
-    contentDesc = `TV Series: "${title}" - Season ${season}, Episode ${episode}`;
-  } else if (type === 'series') {
-    contentDesc = `TV Series: "${title}"`;
-  } else {
-    contentDesc = `Movie: "${title}"`;
-  }
+  // Number each line so Gemini returns them in order
+  const numberedLines = textLines.map((line, i) => `${i + 1}| ${line}`).join('\n');
 
-  return `You are a professional subtitle creator. Generate realistic, high-quality subtitles in SRT format for the following content:
+  return `You are a professional subtitle translator. Translate the following subtitle lines from English to ${langName} (${langDisplay}).
 
-${contentDesc}
+STRICT RULES:
+1. Translate ONLY the text after the "| " separator
+2. Return EXACTLY ${textLines.length} lines, each prefixed with its number and "| "
+3. Keep translations concise — max 42 characters per line when possible
+4. Translate text in [brackets] too (these are scene descriptions like [music playing])
+5. Preserve any proper nouns, brand names, and character names
+6. Maintain the tone, emotion, and style of the original dialogue
+7. Do NOT add any explanations, notes, or extra content
+8. If a line contains only symbols or non-translatable content (like "..." or "♪"), keep it as-is
 
-Requirements:
-1. Write the subtitles in ${langName} (${langDisplay})
-2. Output ONLY valid SRT format - no markdown, no code blocks, no explanations
-3. Generate approximately 40-60 subtitle entries spanning a realistic duration (about 90 minutes for movies, 45 minutes for series episodes)
-4. Include realistic dialogue, narration cues, and scene descriptions in brackets like [music playing] or [door closes]
-5. Use proper SRT timestamp format: HH:MM:SS,mmm --> HH:MM:SS,mmm
-6. Make the dialogue contextually relevant to a ${type} titled "${title}"
-7. Start with subtitle number 1 and increment sequentially
-8. Each subtitle entry should be separated by a blank line
-9. Keep individual subtitle text to maximum 2 lines, about 42 characters per line
-10. Ensure timestamps are sequential and realistic (2-5 seconds per subtitle)
+INPUT LINES:
+${numberedLines}
 
-Example format:
-1
-00:00:01,000 --> 00:00:04,500
-[dramatic music playing]
-
-2
-00:00:05,000 --> 00:00:08,200
-First line of dialogue here.
-
-Begin generating the SRT subtitles now:`;
+OUTPUT (same format, ${langName} translations):`;
 }
 
 /**
- * Call the Gemini API to generate subtitles
- * @param {string} title - Content title
- * @param {string} type - 'movie' or 'series'
- * @param {string} lang - Language code (e.g., 'heb', 'eng')
- * @param {string|null} season - Season number for series
- * @param {string|null} episode - Episode number for series
- * @returns {Promise<string>} SRT formatted subtitle text
+ * Parse Gemini's response back into an array of translated texts
  */
-async function generateSubtitles(title, type, lang, season, episode) {
-  const prompt = buildSubtitlePrompt(title, type, lang, season, episode);
-  const url = `${config.GEMINI_API_URL}/${config.GEMINI_MODEL}:generateContent`;
+function parseTranslationResponse(responseText, expectedCount) {
+  const lines = responseText.trim().split('\n');
+  const translations = new Array(expectedCount).fill('');
 
-  console.log(`[Gemini] Generating subtitles for "${title}" (${type}) in ${lang}...`);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': config.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 8192,
-          topP: 0.95,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Gemini] API Error ${response.status}: ${errorText}`);
-      throw new Error(`Gemini API error: ${response.status}`);
+  for (const line of lines) {
+    const match = line.match(/^(\d+)\s*\|\s*(.+)$/);
+    if (match) {
+      const idx = parseInt(match[1], 10) - 1;
+      if (idx >= 0 && idx < expectedCount) {
+        translations[idx] = match[2].trim();
+      }
     }
-
-    const data = await response.json();
-
-    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-      console.error('[Gemini] Invalid response structure:', JSON.stringify(data).slice(0, 500));
-      throw new Error('Invalid Gemini response structure');
-    }
-
-    let srtText = data.candidates[0].content.parts[0].text;
-
-    // Clean up: remove markdown code fences if present
-    srtText = srtText.replace(/^```(?:srt)?\s*\n?/gm, '');
-    srtText = srtText.replace(/\n?```\s*$/gm, '');
-    srtText = srtText.trim();
-
-    // Validate basic SRT structure
-    if (!/^\d+\s*\n\d{2}:\d{2}:\d{2}/m.test(srtText)) {
-      console.warn('[Gemini] Generated text may not be valid SRT format');
-    }
-
-    console.log(`[Gemini] ✅ Generated ${srtText.split('\n\n').length} subtitle entries for "${title}" in ${lang}`);
-    return srtText;
-
-  } catch (error) {
-    console.error(`[Gemini] Failed to generate subtitles: ${error.message}`);
-    throw error;
   }
+
+  // Count how many we actually got
+  const filled = translations.filter(t => t.length > 0).length;
+  if (filled < expectedCount * 0.7) {
+    console.warn(`[Gemini] Only parsed ${filled}/${expectedCount} translations. Trying fallback parse...`);
+    const cleanLines = responseText.trim().split('\n').filter(l => l.trim().length > 0);
+    if (cleanLines.length >= expectedCount) {
+      for (let i = 0; i < expectedCount; i++) {
+        if (!translations[i]) {
+          translations[i] = cleanLines[i].replace(/^\d+\s*[|.):]\s*/, '').trim();
+        }
+      }
+    }
+  }
+
+  return translations;
 }
 
-module.exports = { generateSubtitles };
+/**
+ * Sleep function for delays
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Extract retry delay from a 429 error response
+ */
+function extractRetryDelay(errorText) {
+  try {
+    const data = JSON.parse(errorText);
+    const retryInfo = data?.error?.details?.find(d =>
+      d['@type']?.includes('RetryInfo')
+    );
+    if (retryInfo?.retryDelay) {
+      const seconds = parseFloat(retryInfo.retryDelay);
+      if (!isNaN(seconds)) return Math.ceil(seconds * 1000);
+    }
+  } catch (e) { /* ignore */ }
+  return 20000; // default 20s
+}
+
+/**
+ * Translate a batch of subtitle text lines with retry logic
+ * @param {string[]} textLines - Array of English subtitle text lines
+ * @param {string} targetLang - Target language code (e.g., 'heb')
+ * @returns {Promise<string[]>} Translated text lines
+ */
+async function translateBatch(textLines, targetLang) {
+  const prompt = buildTranslationPrompt(textLines, targetLang);
+  const url = `${config.GEMINI_API_URL}/${config.GEMINI_MODEL}:generateContent`;
+  const maxRetries = config.MAX_RETRIES || 3;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': config.GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 16384,
+            topP: 0.8,
+          },
+        }),
+      });
+
+      if (response.status === 429) {
+        const errorText = await response.text();
+        const retryDelay = extractRetryDelay(errorText);
+        console.warn(`[Gemini] ⏳ Rate limited (429). Attempt ${attempt}/${maxRetries}. Waiting ${retryDelay / 1000}s...`);
+        await sleep(retryDelay + 1000); // add 1s buffer
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Gemini] API Error ${response.status}: ${errorText.slice(0, 200)}`);
+        throw new Error(`Gemini API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+        throw new Error('Invalid Gemini response structure');
+      }
+
+      const responseText = data.candidates[0].content.parts[0].text;
+      return parseTranslationResponse(responseText, textLines.length);
+
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      if (!error.message.includes('429')) throw error; // only retry on rate limits
+    }
+  }
+
+  throw new Error('Max retries exceeded');
+}
+
+/**
+ * Translate all subtitle texts in batches with rate limiting
+ * @param {string[]} allTexts - All subtitle text lines
+ * @param {string} targetLang - Target language code
+ * @returns {Promise<string[]>} All translated texts
+ */
+async function translateAllTexts(allTexts, targetLang) {
+  const batchSize = config.TRANSLATION_BATCH_SIZE;
+  const batchDelay = config.BATCH_DELAY_MS || 4500;
+  const totalBatches = Math.ceil(allTexts.length / batchSize);
+  const allTranslated = [];
+
+  console.log(`[Gemini] Translating ${allTexts.length} lines in ${totalBatches} batches (${batchSize} lines/batch) to ${targetLang}...`);
+
+  for (let i = 0; i < totalBatches; i++) {
+    const start = i * batchSize;
+    const end = Math.min(start + batchSize, allTexts.length);
+    const batch = allTexts.slice(start, end);
+
+    console.log(`[Gemini]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end})...`);
+
+    try {
+      const translated = await translateBatch(batch, targetLang);
+      allTranslated.push(...translated);
+      console.log(`[Gemini]   ✅ Batch ${i + 1} done`);
+    } catch (error) {
+      console.error(`[Gemini]   ❌ Batch ${i + 1} failed after retries: ${error.message}. Using originals.`);
+      allTranslated.push(...batch);
+    }
+
+    // Delay between batches to avoid rate limiting
+    if (i < totalBatches - 1) {
+      console.log(`[Gemini]   ⏳ Waiting ${batchDelay / 1000}s before next batch...`);
+      await sleep(batchDelay);
+    }
+  }
+
+  const translatedCount = allTranslated.filter((t, i) => t !== allTexts[i]).length;
+  console.log(`[Gemini] ✅ Translation complete: ${translatedCount}/${allTexts.length} lines translated to ${targetLang}`);
+
+  return allTranslated;
+}
+
+module.exports = { translateBatch, translateAllTexts };
