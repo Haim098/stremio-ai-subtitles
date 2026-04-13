@@ -1,7 +1,6 @@
 /**
- * Configuration for the Stremio AI Subtitles add-on v2.1
- * Now using GitHub Models API (OpenAI-compatible) for translation
- * All secrets loaded from environment variables (see .env file)
+ * Configuration for the Stremio AI Subtitles add-on v3
+ * Web UI + Background translation + Cache-only Stremio handler
  */
 
 require('dotenv').config();
@@ -10,7 +9,6 @@ module.exports = {
   // ─── GitHub Models API (Primary translation engine) ────
   GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
   GITHUB_MODELS_URL: 'https://models.github.ai/inference',
-  // gpt-4.1 = best quality, free with Copilot Pro
   GITHUB_MODEL: process.env.GITHUB_MODEL || 'openai/gpt-4.1',
 
   // ─── Gemini API (Fallback) ─────────────────────────────
@@ -18,34 +16,39 @@ module.exports = {
   GEMINI_MODEL: 'gemini-2.5-flash',
   GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models',
 
+  // ─── TMDB API (Movie search + posters) ─────────────────
+  TMDB_API_KEY: process.env.TMDB_API_KEY || '',
+  TMDB_API_TOKEN: process.env.TMDB_API_TOKEN || '',
+  TMDB_BASE_URL: 'https://api.themoviedb.org/3',
+  TMDB_IMAGE_URL: 'https://image.tmdb.org/t/p',
+
   // ─── OpenSubtitles API ─────────────────────────────────
   OPENSUBTITLES_API_KEY: process.env.OPENSUBTITLES_API_KEY || '',
   OPENSUBTITLES_USERNAME: process.env.OPENSUBTITLES_USERNAME || '',
   OPENSUBTITLES_PASSWORD: process.env.OPENSUBTITLES_PASSWORD || '',
   OPENSUBTITLES_API_URL: 'https://api.opensubtitles.com/api/v1',
-  OPENSUBTITLES_USER_AGENT: 'StremioAISubtitles v2.0.0',
+  OPENSUBTITLES_USER_AGENT: 'StremioAISubtitles v3.0.0',
 
   // ─── Server ─────────────────────────────────────────────
   PORT: process.env.PORT || 7000,
 
   // ─── Translation Settings ──────────────────────────────
-  TRANSLATION_BATCH_SIZE: 200,      // subtitle lines per API call
-  BATCH_DELAY_MS: 3000,             // 3s delay between batches (GitHub has generous limits)
-  MAX_RETRIES: 5,                   // retry count on rate limit errors
+  TRANSLATION_BATCH_SIZE: 200,
+  BATCH_DELAY_MS: 3000,
+  MAX_RETRIES: 5,
 
   // ─── Supported Languages ──────────────────────────────
-  // Hebrew only — no need to waste tokens on English passthrough
   SUPPORTED_LANGUAGES: [
-    { code: 'heb', iso: 'he', name: 'Hebrew',  displayName: 'עברית',    rtl: true },
+    { code: 'heb', iso: 'he', name: 'Hebrew', displayName: 'עברית', rtl: true },
   ],
 
   // ─── Cache ─────────────────────────────────────────────
-  CACHE_MAX_AGE: 3600 * 24 * 7,     // 7 days
-  STALE_REVALIDATE: 3600 * 24,      // 1 day
+  CACHE_MAX_AGE: 3600 * 24 * 30,    // 30 days
+  STALE_REVALIDATE: 3600 * 24,
 
   // ─── Add-on Identity ───────────────────────────────────
-  ADDON_ID: 'com.community.ai-subtitles-gemini',
-  ADDON_VERSION: '2.1.0',
+  ADDON_ID: 'com.community.ai-subtitles',
+  ADDON_VERSION: '3.0.0',
   ADDON_NAME: 'AI Translated Subtitles',
-  ADDON_DESCRIPTION: 'Real subtitles translated by AI. Downloads original English subtitles from OpenSubtitles and translates them to Hebrew with perfect synchronization.',
+  ADDON_DESCRIPTION: 'כתוביות בעברית מתורגמות ע"י AI. מוריד כתוביות אנגליות מ-OpenSubtitles ומתרגם לעברית עם סנכרון מושלם.',
 };

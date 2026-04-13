@@ -217,7 +217,7 @@ async function translateBatch(textLines) {
 /**
  * Translate all subtitle texts in batches
  */
-async function translateAllTexts(allTexts, targetLang) {
+async function translateAllTexts(allTexts, targetLang, onProgress) {
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
@@ -227,12 +227,15 @@ async function translateAllTexts(allTexts, targetLang) {
   console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + config.GITHUB_MODEL + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
   console.log(`[AI] Translating ${allTexts.length} lines in ${totalBatches} batches to ${targetLang}...`);
 
+  if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
+
   for (let i = 0; i < totalBatches; i++) {
     const start = i * batchSize;
     const end = Math.min(start + batchSize, allTexts.length);
     const batch = allTexts.slice(start, end);
 
     console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end})...`);
+    if (onProgress) onProgress({ batch: i + 1, totalBatches, status: 'translating', message: `מתרגם קבוצה ${i + 1} מתוך ${totalBatches}...` });
 
     try {
       const translated = await translateBatch(batch);
