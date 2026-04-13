@@ -509,7 +509,7 @@
               <select class="tv-select" id="episode-${movie.tmdbId}" style="display:none;" onchange="enableTvGenerate('${movie.tmdbId}')">
                 <option value="">בחר פרק</option>
               </select>
-              <button class="btn btn-generate" id="btn-start-${movie.tmdbId}" style="display:none; font-size:0.85rem;" onclick="startTvGenerate('${movie.tmdbId}', '${safeTitle}', '${movie.poster}', '${movie.year}')">✨ תרגם פרק זה</button>
+              <button class="btn btn-generate" id="btn-start-${movie.tmdbId}" style="display:none; font-size:0.85rem;" onclick="startTvGeneration('${movie.tmdbId}', '${safeTitle}', '${movie.poster}', '${movie.year}')">✨ תרגם פרק זה</button>
             </div>
           ` : ''}
         </div>
