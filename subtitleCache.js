@@ -1,8 +1,9 @@
 /**
- * Subtitle Cache v2
+ * Subtitle Cache v3
  * ==================
- * Caches both original English SRT content (in memory)
- * and translated SRT files (memory + disk).
+ * Caches translated SRT files on disk + in memory.
+ * Rebuilds memory cache from disk on startup (survives restarts).
+ * Also loads library.json metadata on startup.
  */
 
 const fs = require('fs');
@@ -43,13 +44,14 @@ function sanitizeFilename(str) {
 }
 
 /**
- * Check if translated subtitles exist in cache
+ * Check if translated subtitles exist in cache (memory + disk fallback)
  * @returns {string|null} Filename if cached, null otherwise
  */
 function getCached(id, lang) {
   const key = getCacheKey(id, lang);
   const entry = translatedCache.get(key);
 
+  // Check memory cache
   if (entry) {
     const filePath = path.join(SUBS_DIR, entry.filename);
     if (fs.existsSync(filePath)) {
@@ -57,6 +59,35 @@ function getCached(id, lang) {
     }
     translatedCache.delete(key);
   }
+
+  // Fallback: scan disk for matching file
+  // Try common filename patterns: tt1234567_heb.srt
+  const idClean = id.replace(/:/g, '_');
+  const patterns = [
+    `${idClean}_${lang}.srt`,
+    `${id}_${lang}.srt`,
+  ];
+
+  for (const pattern of patterns) {
+    const filePath = path.join(SUBS_DIR, pattern);
+    if (fs.existsSync(filePath)) {
+      // Restore to memory cache
+      translatedCache.set(key, { filename: pattern, createdAt: Date.now() });
+      console.log(`[Cache] Restored from disk: ${pattern}`);
+      return pattern;
+    }
+  }
+
+  // Also try broader scan - any file ending in _lang.srt that contains the imdbId
+  try {
+    const imdbId = id.split(':')[0]; // e.g., tt1234567
+    const files = fs.readdirSync(SUBS_DIR).filter(f => f.endsWith(`_${lang}.srt`) && f.includes(imdbId));
+    if (files.length > 0) {
+      translatedCache.set(key, { filename: files[0], createdAt: Date.now() });
+      console.log(`[Cache] Found on disk via scan: ${files[0]}`);
+      return files[0];
+    }
+  } catch (e) { /* ignore */ }
 
   return null;
 }
@@ -83,6 +114,43 @@ function setCached(id, lang, srtText, title) {
 }
 
 /**
+ * Rebuild memory cache from disk on startup
+ * Scans existing .srt files and restores them to the memory map
+ */
+function rebuildFromDisk() {
+  try {
+    const files = fs.readdirSync(SUBS_DIR).filter(f => f.endsWith('.srt'));
+    let restored = 0;
+
+    for (const file of files) {
+      // Parse filename: something_lang.srt
+      const match = file.match(/^(.+)_(heb|eng|ara|fre|spa|ger|rus)\.srt$/);
+      if (match) {
+        const idPart = match[1]; // could be tt1234567 or sanitized title
+        const lang = match[2];
+
+        // Try to find the IMDB ID in the filename
+        const imdbMatch = idPart.match(/(tt\d+)/);
+        if (imdbMatch) {
+          const imdbId = imdbMatch[1];
+          const key = getCacheKey(imdbId, lang);
+          if (!translatedCache.has(key)) {
+            translatedCache.set(key, { filename: file, createdAt: Date.now() });
+            restored++;
+          }
+        }
+      }
+    }
+
+    if (restored > 0) {
+      console.log(`[Cache] ♻️ Restored ${restored} entries from disk`);
+    }
+  } catch (e) {
+    console.error('[Cache] Rebuild error:', e.message);
+  }
+}
+
+/**
  * Get cache statistics
  */
 function getStats() {
@@ -98,4 +166,7 @@ function getStats() {
   };
 }
 
-module.exports = { getCached, setCached, getOriginalCached, setOriginalCached, getStats, SUBS_DIR };
+// Rebuild cache from disk on module load
+rebuildFromDisk();
+
+module.exports = { getCached, setCached, getOriginalCached, setOriginalCached, getStats, SUBS_DIR, rebuildFromDisk };
