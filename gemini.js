@@ -109,7 +109,7 @@ async function translateBatchGitHub(textLines) {
         'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
       },
       body: JSON.stringify({
-        model: config.GITHUB_MODEL,
+        model: activeGithubModel || config.GITHUB_MODEL,
         messages: [
           { role: 'system', content: getSystemPrompt() },
           { role: 'user', content: buildUserPrompt(textLines) },
@@ -193,7 +193,12 @@ async function translateBatchGemini(textLines) {
  * Determine which engine to use
  */
 let activeEngine = null;
+let activeGithubModel = null;
+
 function getEngine() {
+  if (!activeGithubModel && config.GITHUB_TOKEN) {
+    activeGithubModel = config.GITHUB_MODEL;
+  }
   if (activeEngine) return activeEngine;
   if (config.GITHUB_TOKEN) return activeEngine = 'github';
   if (config.GEMINI_API_KEY) return activeEngine = 'gemini';
@@ -220,14 +225,19 @@ async function translateBatch(textLines) {
         
         // Hard rate limit logic (> 60s)
         if (delay > 60000) {
-          console.warn(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting engine fallback...`);
-          if (engine === 'github' && config.GEMINI_API_KEY) {
-            console.warn('[AI] 🔄 Swapping engine to Gemini!');
+          console.warn(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting fallback...`);
+          
+          if (engine === 'github' && activeGithubModel === config.GITHUB_MODEL && config.GITHUB_FALLBACK_MODEL) {
+            console.warn(`[AI] 🔄 Swapping GitHub model to secondary: ${config.GITHUB_FALLBACK_MODEL}`);
+            activeGithubModel = config.GITHUB_FALLBACK_MODEL;
+            continue; // retry immediately with secondary GitHub model
+          } else if (engine === 'github' && config.GEMINI_API_KEY) {
+            console.warn('[AI] 🔄 Swapping engine completely to Gemini!');
             activeEngine = 'gemini';
             engine = 'gemini';
             continue; // retry immediately with Gemini
           } else {
-            console.warn('[AI] ❌ No fallback engine available! Skipping this batch.');
+            console.warn('[AI] ❌ No fallback options left! Skipping this batch.');
             return textLines; // Use originals instead of freezing the server
           }
         }
