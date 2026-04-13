@@ -115,7 +115,6 @@ async function translateBatchGitHub(textLines) {
           { role: 'user', content: buildUserPrompt(textLines) },
         ],
         temperature: 0.3,
-        max_tokens: 16384,
       }),
       signal: controller.signal,
     });
