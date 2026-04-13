@@ -622,6 +622,7 @@
       const episode = btnData.dataset.episode;
       
       const uiBtn = realBtnElement || btnData;
+      const force = uiBtn.dataset.force === 'true';
 
       // Step 1: Get IMDB ID
       uiBtn.disabled = true;
@@ -644,14 +645,17 @@
         const genRes = await fetch(`${BASE}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imdbId, type, title, poster, year, season, episode })
+          body: JSON.stringify({ imdbId, type, title, poster, year, season, episode, force })
         });
         const genData = await genRes.json();
 
         if (genData.status === 'exists') {
-          uiBtn.className = 'btn btn-done';
-          uiBtn.textContent = '✅ כתוביות מוכנות';
-          showToast('✅ הכתוביות כבר קיימות!');
+          uiBtn.className = 'btn btn-generate';
+          uiBtn.textContent = '🔄 תרגם מחדש';
+          uiBtn.style.background = 'linear-gradient(135deg, #ca8a04, #a16207)';
+          uiBtn.dataset.force = 'true';
+          uiBtn.disabled = false;
+          showToast('✅ הכתוביות כבר קיימות! לחץ שוב יצירה מחדש.');
           return;
         }
 

@@ -194,7 +194,7 @@ app.get('/api/status/:imdbId', (req, res) => {
 
 // ─── API: Start subtitle generation ─────────────────────
 app.post('/api/generate', async (req, res) => {
-  const { imdbId, type, title, poster, year, season, episode } = req.body;
+  const { imdbId, type, title, poster, year, season, episode, force } = req.body;
 
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
   
@@ -208,7 +208,7 @@ app.post('/api/generate', async (req, res) => {
 
   // Check cache FIRST (v3: memory + disk fallback)
   const cachedPath = cache.getCached(contentId, 'heb');
-  if (cachedPath) {
+  if (cachedPath && !force) {
     console.log(`[Stremio] WebUI Generate requested but already cached: ${contentId}`);
     return res.json({ status: 'exists', filename: cachedPath });
   }
