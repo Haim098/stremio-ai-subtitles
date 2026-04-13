@@ -219,13 +219,10 @@ async function translateBatch(textLines) {
         await sleep(delay + 1000);
         continue;
       }
-      // Content filter — try splitting batch in half
-      if (error.contentFilter && textLines.length > 10) {
-        console.warn(`[AI] ⚠️ Content filter hit. Splitting batch (${textLines.length} lines) in half...`);
-        const mid = Math.ceil(textLines.length / 2);
-        const firstHalf = await translateBatchSafe(textLines.slice(0, mid));
-        const secondHalf = await translateBatchSafe(textLines.slice(mid));
-        return [...firstHalf, ...secondHalf];
+      // Content filter — skip this batch entirely, use originals
+      if (error.contentFilter) {
+        console.warn(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
+        return textLines;
       }
       if (attempt === maxRetries) throw error;
       console.warn(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
@@ -233,18 +230,6 @@ async function translateBatch(textLines) {
     }
   }
   throw new Error('Max retries exceeded');
-}
-
-/**
- * Safe translation that returns originals on failure
- */
-async function translateBatchSafe(textLines) {
-  try {
-    return await translateBatch(textLines);
-  } catch (err) {
-    console.warn(`[AI] ⚠️ Sub-batch failed (${textLines.length} lines). Using originals.`);
-    return textLines;
-  }
 }
 
 /**
