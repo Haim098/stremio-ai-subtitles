@@ -192,17 +192,19 @@ async function translateBatchGemini(textLines) {
 /**
  * Determine which engine to use
  */
+let activeEngine = null;
 function getEngine() {
-  if (config.GITHUB_TOKEN) return 'github';
-  if (config.GEMINI_API_KEY) return 'gemini';
+  if (activeEngine) return activeEngine;
+  if (config.GITHUB_TOKEN) return activeEngine = 'github';
+  if (config.GEMINI_API_KEY) return activeEngine = 'gemini';
   throw new Error('No AI API configured! Set GITHUB_TOKEN or GEMINI_API_KEY');
 }
 
 /**
- * Translate a batch with retry logic
+ * Translate a batch with retry logic and smart fallback
  */
 async function translateBatch(textLines) {
-  const engine = getEngine();
+  let engine = getEngine();
   const maxRetries = config.MAX_RETRIES;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -215,21 +217,43 @@ async function translateBatch(textLines) {
     } catch (error) {
       if (error.status === 429) {
         const delay = error.retryDelay || 15000;
-        console.warn(`[AI] ⏳ Rate limited. Attempt ${attempt}/${maxRetries}. Waiting ${delay / 1000}s...`);
+        
+        // Hard rate limit logic (> 60s)
+        if (delay > 60000) {
+          console.warn(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting engine fallback...`);
+          if (engine === 'github' && config.GEMINI_API_KEY) {
+            console.warn('[AI] 🔄 Swapping engine to Gemini!');
+            activeEngine = 'gemini';
+            engine = 'gemini';
+            continue; // retry immediately with Gemini
+          } else {
+            console.warn('[AI] ❌ No fallback engine available! Skipping this batch.');
+            return textLines; // Use originals instead of freezing the server
+          }
+        }
+
+        console.warn(`[AI] ⏳ Rate limited. Attempt ${attempt}/${maxRetries}. Waiting ${Math.round(delay / 1000)}s...`);
         await sleep(delay + 1000);
         continue;
       }
+      
       // Content filter — skip this batch entirely, use originals
       if (error.contentFilter) {
         console.warn(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
         return textLines;
       }
-      if (attempt === maxRetries) throw error;
+      
+      if (attempt === maxRetries) {
+        console.warn(`[AI] ❌ Max retries reached or hard failure. Using originals.`);
+        return textLines;
+      }
+      
       console.warn(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
       await sleep(3000);
     }
   }
-  throw new Error('Max retries exceeded');
+  
+  return textLines; // Fallback to originals
 }
 
 /**
