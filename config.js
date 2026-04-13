@@ -10,9 +10,8 @@ module.exports = {
   // ─── GitHub Models API (Primary translation engine) ────
   GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
   GITHUB_MODELS_URL: 'https://models.github.ai/inference',
-  // gpt-4.1-mini = fast, accurate, free with Copilot Pro
-  // Change to 'openai/gpt-5-mini' when it becomes stable on GitHub Models
-  GITHUB_MODEL: process.env.GITHUB_MODEL || 'openai/gpt-4.1-mini',
+  // gpt-4.1 = best quality, free with Copilot Pro
+  GITHUB_MODEL: process.env.GITHUB_MODEL || 'openai/gpt-4.1',
 
   // ─── Gemini API (Fallback) ─────────────────────────────
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
@@ -35,10 +34,9 @@ module.exports = {
   MAX_RETRIES: 5,                   // retry count on rate limit errors
 
   // ─── Supported Languages ──────────────────────────────
-  // Hebrew only + English passthrough
+  // Hebrew only — no need to waste tokens on English passthrough
   SUPPORTED_LANGUAGES: [
     { code: 'heb', iso: 'he', name: 'Hebrew',  displayName: 'עברית',    rtl: true },
-    { code: 'eng', iso: 'en', name: 'English', displayName: 'English',  rtl: false },
   ],
 
   // ─── Cache ─────────────────────────────────────────────
