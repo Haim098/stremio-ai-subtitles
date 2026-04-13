@@ -45,7 +45,8 @@ const manifest = {
 
 console.log('═══════════════════════════════════════════════════════════');
 console.log('  🎬 Stremio AI Translated Subtitles v2');
-console.log('  📡 Translation: ' + config.GEMINI_MODEL);
+const aiEngine = config.GITHUB_TOKEN ? `GitHub Models (${config.GITHUB_MODEL})` : `Gemini (${config.GEMINI_MODEL})`;
+console.log('  📡 Translation: ' + aiEngine);
 console.log('  📥 Source: OpenSubtitles.com');
 console.log('  🌐 Languages: ' + config.SUPPORTED_LANGUAGES.map(l => l.displayName).join(', '));
 console.log('═══════════════════════════════════════════════════════════');
