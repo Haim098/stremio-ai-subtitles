@@ -78,10 +78,10 @@ function getCached(id, lang) {
     }
   }
 
-  // Also try broader scan - any file ending in _lang.srt that contains the imdbId
+  // Also try broader scan - any file ending in _lang.srt that contains the safe ID
   try {
-    const imdbId = id.split(':')[0]; // e.g., tt1234567
-    const files = fs.readdirSync(SUBS_DIR).filter(f => f.endsWith(`_${lang}.srt`) && f.includes(imdbId));
+    const safeId = sanitizeFilename(id);
+    const files = fs.readdirSync(SUBS_DIR).filter(f => f.endsWith(`_${lang}.srt`) && f.includes(safeId));
     if (files.length > 0) {
       translatedCache.set(key, { filename: files[0], createdAt: Date.now() });
       console.log(`[Cache] Found on disk via scan: ${files[0]}`);

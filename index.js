@@ -153,6 +153,30 @@ app.get('/api/imdb/:tmdbId', async (req, res) => {
   }
 });
 
+// ─── API: Get TV Series Seasons ─────────────────────────
+app.get('/api/tv/:tmdbId', async (req, res) => {
+  try {
+    const url = `${config.TMDB_BASE_URL}/tv/${req.params.tmdbId}?language=he-IL`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${config.TMDB_API_TOKEN}` } });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'TV lookup failed' });
+  }
+});
+
+// ─── API: Get TV Series Episodes for Season ─────────────
+app.get('/api/tv/:tmdbId/season/:season_number', async (req, res) => {
+  try {
+    const url = `${config.TMDB_BASE_URL}/tv/${req.params.tmdbId}/season/${req.params.season_number}?language=he-IL`;
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${config.TMDB_API_TOKEN}` } });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: 'Season lookup failed' });
+  }
+});
+
 // ─── API: Check subtitle status ─────────────────────────
 app.get('/api/status/:imdbId', (req, res) => {
   const { imdbId } = req.params;
@@ -170,43 +194,49 @@ app.get('/api/status/:imdbId', (req, res) => {
 
 // ─── API: Start subtitle generation ─────────────────────
 app.post('/api/generate', async (req, res) => {
-  const { imdbId, type, title, poster, year } = req.body;
+  const { imdbId, type, title, poster, year, season, episode } = req.body;
 
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
   
+  const isSeries = type === 'tv' || type === 'series';
+  const contentId = isSeries && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
+
   // If already generating, don't start again
-  if (progressStore[imdbId] && progressStore[imdbId].status !== 'error' && progressStore[imdbId].status !== 'done') {
+  if (progressStore[contentId] && progressStore[contentId].status !== 'error' && progressStore[contentId].status !== 'done') {
     return res.json({ status: 'started' });
   }
 
-  // Check cache
-  const existing = cache.getCached(imdbId, 'heb');
-  if (existing) return res.json({ status: 'exists', filename: existing });
+  // Check cache FIRST (v3: memory + disk fallback)
+  const cachedPath = cache.getCached(contentId, 'heb');
+  if (cachedPath) {
+    console.log(`[Stremio] WebUI Generate requested but already cached: ${contentId}`);
+    return res.json({ status: 'exists', filename: cachedPath });
+  }
 
   // Start generation in background
-  activeJobs.add(imdbId);
-  progressStore[imdbId] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, logs: [] };
+  activeJobs.add(contentId);
+  progressStore[contentId] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, logs: [] };
   res.json({ status: 'started' });
 
   // Background work
   (async () => {
     try {
       // Step 1: Download English subtitles
-      const englishSrt = await getEnglishSubtitles(imdbId.replace('tt', ''), type || 'movie');
+      const englishSrt = await getEnglishSubtitles(imdbId.replace('tt', ''), type || 'movie', season, episode);
       if (!englishSrt) {
-        progressStore[imdbId] = { status: 'error', message: 'לא נמצאו כתוביות אנגליות לסרט זה' };
-        activeJobs.delete(imdbId);
+        progressStore[contentId] = { status: 'error', message: 'לא נמצאו כתוביות אנגליות לסרט זה' };
+        activeJobs.delete(contentId);
         return;
       }
 
       const validation = srtParser.validate(englishSrt);
       if (!validation.valid) {
-        progressStore[imdbId] = { status: 'error', message: 'קובץ כתוביות שגוי' };
-        activeJobs.delete(imdbId);
+        progressStore[contentId] = { status: 'error', message: 'קובץ כתוביות שגוי' };
+        activeJobs.delete(contentId);
         return;
       }
 
-      cache.setOriginalCached(imdbId, englishSrt);
+      cache.setOriginalCached(contentId, englishSrt);
       
       // Step 2: Parse
       const blocks = srtParser.parse(englishSrt);
@@ -214,13 +244,13 @@ app.post('/api/generate', async (req, res) => {
 
       // Step 3: Translate with progress callback
       const onProgress = (update) => {
-        progressStore[imdbId].status = update.status || progressStore[imdbId].status;
-        progressStore[imdbId].batch = update.batch;
-        progressStore[imdbId].totalBatches = update.totalBatches;
-        progressStore[imdbId].message = update.message;
+        progressStore[contentId].status = update.status || progressStore[contentId].status;
+        progressStore[contentId].batch = update.batch;
+        progressStore[contentId].totalBatches = update.totalBatches;
+        progressStore[contentId].message = update.message;
         if (update.log) {
-          progressStore[imdbId].logs = progressStore[imdbId].logs || [];
-          progressStore[imdbId].logs.push(update.log);
+          progressStore[contentId].logs = progressStore[contentId].logs || [];
+          progressStore[contentId].logs.push(update.log);
         }
       };
       const translatedTexts = await translateAllTexts(texts, 'heb', onProgress);
@@ -228,22 +258,23 @@ app.post('/api/generate', async (req, res) => {
       // Step 4: Rebuild SRT
       const translatedBlocks = srtParser.replaceTexts(blocks, translatedTexts);
       const translatedSrt = srtParser.build(translatedBlocks);
-      const filename = cache.setCached(imdbId, 'heb', translatedSrt, imdbId);
+      const filename = cache.setCached(contentId, 'heb', translatedSrt, contentId);
 
       // Step 5: Update library
       const library = loadLibrary();
-      const entry = { imdbId, title: title || imdbId, poster: poster || null, year: year || '', createdAt: new Date().toISOString(), filename };
-      const idx = library.findIndex(e => e.imdbId === imdbId);
+      const displayTitle = isSeries ? `${title || imdbId} (S${season}E${episode})` : title || imdbId;
+      const entry = { imdbId: contentId, title: displayTitle, poster: poster || null, year: year || '', createdAt: new Date().toISOString(), filename };
+      const idx = library.findIndex(e => e.imdbId === contentId);
       if (idx >= 0) library[idx] = entry; else library.unshift(entry);
       saveLibrary(library);
 
-      progressStore[imdbId] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename };
-      console.log(`[Generate] ✅ ${title || imdbId} — subtitles ready`);
+      progressStore[contentId] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename, logs: progressStore[contentId].logs };
+      console.log(`[Generate] ✅ ${displayTitle} — subtitles ready`);
     } catch (err) {
-      console.error(`[Generate] ❌ ${imdbId}:`, err.message);
-      progressStore[imdbId] = { status: 'error', message: `שגיאה: ${err.message}` };
+      console.error(`[Generate] ❌ ${contentId}:`, err.message);
+      progressStore[contentId] = { status: 'error', message: `שגיאה: ${err.message}`, logs: progressStore[contentId].logs };
     } finally {
-      activeJobs.delete(imdbId);
+      activeJobs.delete(contentId);
     }
   })();
 });

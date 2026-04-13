@@ -225,7 +225,7 @@ async function getEnglishSubtitles(imdbId, type, season, episode) {
   try {
     let result;
 
-    if (type === 'series' && season && episode) {
+    if ((type === 'series' || type === 'tv') && season && episode) {
       result = await searchSeriesSubtitles(imdbId, season, episode);
     }
     

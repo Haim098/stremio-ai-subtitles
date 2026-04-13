@@ -201,6 +201,22 @@
       color: var(--success);
       cursor: default;
     }
+    
+    /* ── TV Selectors ── */
+    .tv-select {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 6px;
+      font-family: 'Heebo', sans-serif;
+      font-size: 0.85rem;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-primary);
+      outline: none;
+      direction: rtl;
+    }
+
     .btn-progress {
       background: rgba(139,92,246,0.15);
       color: var(--accent);
@@ -468,73 +484,186 @@
     function createMovieCard(movie, isLibrary) {
       const card = document.createElement('div');
       card.className = 'card';
+      const safeTitle = movie.title ? movie.title.replace(/"/g, '&quot;').replace(/'/g, '\\\'') : '';
       card.innerHTML = `
-        <img class="card-poster" src="${movie.poster}" alt="${movie.title}" loading="lazy" 
+        <img class="card-poster" src="${movie.poster}" alt="${safeTitle}" loading="lazy" 
              onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 300%22><rect fill=%22%231a1a2e%22 width=%22200%22 height=%22300%22/><text x=%2250%%22 y=%2250%%22 fill=%22%2364748b%22 text-anchor=%22middle%22 font-size=%2240%22>🎬</text></svg>'">
         <div class="card-info">
-          <div class="card-title" title="${movie.title}">${movie.title}</div>
+          <div class="card-title" title="${safeTitle}">${safeTitle}</div>
           <div class="card-meta">
             ${movie.year ? `<span>${movie.year}</span>` : ''}
             ${movie.rating ? `<span class="card-rating">⭐ ${movie.rating}</span>` : ''}
             ${movie.type ? `<span class="card-type">${movie.type === 'movie' ? 'סרט' : 'סדרה'}</span>` : ''}
           </div>
-          <button class="btn ${isLibrary ? 'btn-done' : 'btn-generate'}" 
-                  data-tmdb="${movie.tmdbId}" data-type="${movie.type || 'movie'}" data-title="${movie.title}" data-poster="${movie.poster}" data-year="${movie.year}"
-                  ${isLibrary ? '' : `onclick="generateSubtitles(this)"`}>
-            ${isLibrary ? '✅ כתוביות מוכנות' : '🎯 צור כתוביות עבריות'}
+          <button class="btn ${isLibrary ? 'btn-done' : 'btn-generate'}" id="btn-main-${movie.tmdbId}"
+                  data-tmdb="${movie.tmdbId}" data-type="${movie.type || 'movie'}" data-title="${safeTitle}" data-poster="${movie.poster}" data-year="${movie.year}"
+                  ${isLibrary ? '' : `onclick="handleGenerateClick(this)"`}>
+            ${isLibrary ? '✅ כתוביות מוכנות' : (movie.type === 'tv' || movie.type === 'series' ? '🎯 בחר עונה ופרק' : '🎯 צור כתוביות עבריות')}
           </button>
+          
+          ${!isLibrary && (movie.type === 'tv' || movie.type === 'series') ? `
+            <div id="tv-ui-${movie.tmdbId}" style="display:none; margin-top:10px;">
+              <select class="tv-select" id="season-${movie.tmdbId}" onchange="loadEpisodes(this.value, '${movie.tmdbId}')">
+                <option value="">טוען עונות...</option>
+              </select>
+              <select class="tv-select" id="episode-${movie.tmdbId}" style="display:none;" onchange="enableTvGenerate('${movie.tmdbId}')">
+                <option value="">בחר פרק</option>
+              </select>
+              <button class="btn btn-generate" id="btn-start-${movie.tmdbId}" style="display:none; font-size:0.85rem;" onclick="startTvGenerate('${movie.tmdbId}', '${safeTitle}', '${movie.poster}', '${movie.year}')">✨ תרגם פרק זה</button>
+            </div>
+          ` : ''}
         </div>
       `;
       return card;
     }
 
-    // ── Generate Subtitles ──
-    async function generateSubtitles(btn) {
-      const tmdbId = btn.dataset.tmdb;
-      const type = btn.dataset.type;
-      const title = btn.dataset.title;
-      const poster = btn.dataset.poster;
-      const year = btn.dataset.year;
+    // ── Generate Logic ──
+    async function handleGenerateClick(btn) {
+      if (btn.dataset.type === 'tv' || btn.dataset.type === 'series') {
+        const tmdbId = btn.dataset.tmdb;
+        document.getElementById(`btn-main-${tmdbId}`).style.display = 'none';
+        document.getElementById(`tv-ui-${tmdbId}`).style.display = 'block';
+        
+        // Fetch seasons
+        try {
+          const res = await fetch(`${BASE}/api/tv/${tmdbId}`);
+          const data = await res.json();
+          const seasonSelect = document.getElementById(`season-${tmdbId}`);
+          
+          if (!data.seasons || data.seasons.length === 0) {
+            seasonSelect.innerHTML = '<option value="">לא נמצאו עונות</option>';
+            return;
+          }
+          
+          let html = '<option value="">בחר עונה...</option>';
+          data.seasons.filter(s => s.season_number > 0).forEach(s => {
+            html += `<option value="${s.season_number}">עונה ${s.season_number}</option>`;
+          });
+          seasonSelect.innerHTML = html;
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        generateSubtitles(btn);
+      }
+    }
 
-      // Step 1: Get IMDB ID
+    async function loadEpisodes(season, tmdbId) {
+      const epSelect = document.getElementById(`episode-${tmdbId}`);
+      const startBtn = document.getElementById(`btn-start-${tmdbId}`);
+      epSelect.style.display = 'none';
+      startBtn.style.display = 'none';
+      
+      if (!season) return;
+
+      epSelect.innerHTML = '<option value="">טוען פרקים...</option>';
+      epSelect.style.display = 'block';
+
+      try {
+        const res = await fetch(`${BASE}/api/tv/${tmdbId}/season/${season}`);
+        const data = await res.json();
+        
+        if (!data.episodes || data.episodes.length === 0) {
+          epSelect.innerHTML = '<option value="">לא נמצאו פרקים</option>';
+          return;
+        }
+
+        let html = '<option value="">בחרי פרק...</option>';
+        data.episodes.forEach(e => {
+          html += `<option value="${e.episode_number}">פרק ${e.episode_number} ${e.name ? ` - ${e.name}` : ''}</option>`;
+        });
+        epSelect.innerHTML = html;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function enableTvGenerate(tmdbId) {
+      const epSelect = document.getElementById(`episode-${tmdbId}`);
+      const btn = document.getElementById(`btn-start-${tmdbId}`);
+      if (epSelect.value) {
+        btn.style.display = 'block';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
+
+    function startTvGeneration(tmdbId, title, poster, year) {
+      const season = document.getElementById(`season-${tmdbId}`).value;
+      const episode = document.getElementById(`episode-${tmdbId}`).value;
+      if (!season || !episode) return;
+      
+      const btn = document.getElementById(`btn-start-${tmdbId}`);
+      
+      // We pass the parameters manually to generateSubtitles logic
+      // create a fake button element so we can reuse generateSubtitles code
+      const fakeBtn = {
+        dataset: { tmdb: tmdbId, type: 'tv', title, poster, year, season, episode },
+        disabled: false,
+        className: btn.className,
+        textContent: btn.textContent,
+        style: btn.style
+      };
+      
+      // Override the actual button text
       btn.disabled = true;
       btn.textContent = 'מחפש...';
+      
+      generateSubtitles(fakeBtn, btn); // Pass real btn reference to update UI properly
+    }
+
+    async function generateSubtitles(btnData, realBtnElement = null) {
+      const tmdbId = btnData.dataset.tmdb;
+      const type = btnData.dataset.type;
+      const title = btnData.dataset.title;
+      const poster = btnData.dataset.poster;
+      const year = btnData.dataset.year;
+      const season = btnData.dataset.season; // Will be undefined for movies
+      const episode = btnData.dataset.episode;
+      
+      const uiBtn = realBtnElement || btnData;
+
+      // Step 1: Get IMDB ID
+      uiBtn.disabled = true;
+      uiBtn.textContent = 'מחפש...';
 
       try {
         const imdbRes = await fetch(`${BASE}/api/imdb/${tmdbId}?type=${type}`);
         const imdbData = await imdbRes.json();
         if (!imdbData.imdbId) {
           showToast('❌ לא נמצא IMDB ID לסרט זה');
-          btn.disabled = false;
-          btn.textContent = '🎯 צור כתוביות עבריות';
+          uiBtn.disabled = false;
+          uiBtn.textContent = type === 'tv' ? '✨ תרגם פרק זה' : '🎯 צור כתוביות עבריות';
           return;
         }
 
         const imdbId = imdbData.imdbId;
+        const progressId = (type === 'tv' || type === 'series') && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
 
         // Step 2: Start generation
         const genRes = await fetch(`${BASE}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imdbId, type, title, poster, year })
+          body: JSON.stringify({ imdbId, type, title, poster, year, season, episode })
         });
         const genData = await genRes.json();
 
         if (genData.status === 'exists') {
-          btn.className = 'btn btn-done';
-          btn.textContent = '✅ כתוביות מוכנות';
+          uiBtn.className = 'btn btn-done';
+          uiBtn.textContent = '✅ כתוביות מוכנות';
           showToast('✅ הכתוביות כבר קיימות!');
           return;
         }
 
         // Step 3: Show progress modal
-        showProgressModal(title);
-        listenToProgress(imdbId, btn);
+        const displayTitle = (type === 'tv' || type === 'series') && season && episode ? `${title} (עונה ${season} פרק ${episode})` : title;
+        showProgressModal(displayTitle);
+        listenToProgress(progressId, uiBtn);
 
       } catch (err) {
         showToast('❌ שגיאה: ' + err.message);
-        btn.disabled = false;
-        btn.textContent = '🎯 צור כתוביות עבריות';
+        uiBtn.disabled = false;
+        uiBtn.textContent = type === 'tv' ? '✨ תרגם פרק זה' : '🎯 צור כתוביות עבריות';
       }
     }
 
