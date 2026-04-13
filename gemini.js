@@ -98,41 +98,54 @@ function getRetryDelay(errorText) {
 
 async function translateBatchGitHub(textLines) {
   const url = `${config.GITHUB_MODELS_URL}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
-    },
-    body: JSON.stringify({
-      model: config.GITHUB_MODEL,
-      messages: [
-        { role: 'system', content: getSystemPrompt() },
-        { role: 'user', content: buildUserPrompt(textLines) },
-      ],
-      temperature: 0.3,
-      max_tokens: 16384,
-    }),
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
+      },
+      body: JSON.stringify({
+        model: config.GITHUB_MODEL,
+        messages: [
+          { role: 'system', content: getSystemPrompt() },
+          { role: 'user', content: buildUserPrompt(textLines) },
+        ],
+        temperature: 0.3,
+        max_tokens: 16384,
+      }),
+      signal: controller.signal,
+    });
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('retry-after');
-    const delay = retryAfter ? parseInt(retryAfter) * 1000 : 15000;
-    throw { status: 429, retryDelay: delay };
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after');
+      const delay = retryAfter ? parseInt(retryAfter) * 1000 : 15000;
+      throw { status: 429, retryDelay: delay };
+    }
+
+    if (response.status === 400) {
+      const errText = await response.text();
+      console.error(`[GitHub] Content filter (400): ${errText.slice(0, 200)}`);
+      throw { status: 400, contentFilter: true };
+    }
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[GitHub] API Error ${response.status}: ${errText.slice(0, 300)}`);
+      throw new Error(`GitHub Models API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error('No content in GitHub response');
+
+    return parseResponse(content, textLines.length);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  if (!response.ok) {
-    const errText = await response.text();
-    console.error(`[GitHub] API Error ${response.status}: ${errText.slice(0, 300)}`);
-    throw new Error(`GitHub Models API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('No content in GitHub response');
-
-  return parseResponse(content, textLines.length);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -206,12 +219,32 @@ async function translateBatch(textLines) {
         await sleep(delay + 1000);
         continue;
       }
+      // Content filter — try splitting batch in half
+      if (error.contentFilter && textLines.length > 10) {
+        console.warn(`[AI] ⚠️ Content filter hit. Splitting batch (${textLines.length} lines) in half...`);
+        const mid = Math.ceil(textLines.length / 2);
+        const firstHalf = await translateBatchSafe(textLines.slice(0, mid));
+        const secondHalf = await translateBatchSafe(textLines.slice(mid));
+        return [...firstHalf, ...secondHalf];
+      }
       if (attempt === maxRetries) throw error;
-      console.warn(`[AI] Error on attempt ${attempt}: ${error.message}. Retrying...`);
+      console.warn(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
       await sleep(3000);
     }
   }
   throw new Error('Max retries exceeded');
+}
+
+/**
+ * Safe translation that returns originals on failure
+ */
+async function translateBatchSafe(textLines) {
+  try {
+    return await translateBatch(textLines);
+  } catch (err) {
+    console.warn(`[AI] ⚠️ Sub-batch failed (${textLines.length} lines). Using originals.`);
+    return textLines;
+  }
 }
 
 /**
