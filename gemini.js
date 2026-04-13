@@ -107,6 +107,7 @@ async function translateBatchGitHub(textLines) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
+        'User-Agent': 'Stremio-AI-Subtitles/3.5'
       },
       body: JSON.stringify({
         model: activeGithubModel || config.GITHUB_MODELS_QUEUE[0],
@@ -205,6 +206,17 @@ function getEngine() {
   throw new Error('No AI API configured! Set GITHUB_TOKEN or GEMINI_API_KEY');
 }
 
+let currentOnProgress = null;
+
+function logToUI(msg) {
+  console.warn(msg);
+  if (currentOnProgress) {
+    currentOnProgress({ status: 'translating', log: msg, batch: progressBatchTracker });
+  }
+}
+
+let progressBatchTracker = 0;
+
 /**
  * Translate a batch with retry logic and smart fallback
  */
@@ -225,46 +237,46 @@ async function translateBatch(textLines) {
         
         // Hard rate limit logic (> 60s)
         if (delay > 60000) {
-          console.warn(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting fallback...`);
+          logToUI(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting fallback...`);
           
           if (engine === 'github') {
             activeGithubModelIndex++;
             if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
               activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
-              console.warn(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
+              logToUI(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
               continue; // retry immediately with next GitHub model
             } else if (config.GEMINI_API_KEY) {
-              console.warn('[AI] 🔄 GitHub Models exhausted! Swapping engine entirely to Gemini!');
+              logToUI('[AI] 🔄 GitHub Models exhausted! Swapping engine entirely to Gemini!');
               activeEngine = 'gemini';
               engine = 'gemini';
               continue; // retry immediately with Gemini
             } else {
-              console.warn('[AI] ❌ No fallback options left! Skipping this batch.');
+              logToUI('[AI] ❌ No fallback options left! Skipping this batch.');
               return textLines; // Use originals instead of freezing the server
             }
           } else {
-            console.warn('[AI] ❌ No fallback options left for this engine! Skipping this batch.');
+            logToUI('[AI] ❌ No fallback options left for this engine! Skipping this batch.');
             return textLines;
           }
         }
 
-        console.warn(`[AI] ⏳ Rate limited. Attempt ${attempt}/${maxRetries}. Waiting ${Math.round(delay / 1000)}s...`);
+        logToUI(`[AI] ⏳ Rate limited. Attempt ${attempt}/${maxRetries}. Waiting ${Math.round(delay / 1000)}s...`);
         await sleep(delay + 1000);
         continue;
       }
       
       // Content filter — skip this batch entirely, use originals
       if (error.contentFilter) {
-        console.warn(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
+        logToUI(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
         return textLines;
       }
       
       if (attempt === maxRetries) {
-        console.warn(`[AI] ❌ Max retries reached or hard failure. Using originals.`);
+        logToUI(`[AI] ❌ Max retries reached or hard failure. Using originals.`);
         return textLines;
       }
       
-      console.warn(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
+      logToUI(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
       await sleep(3000);
     }
   }
@@ -276,18 +288,21 @@ async function translateBatch(textLines) {
  * Translate all subtitle texts in batches
  */
 async function translateAllTexts(allTexts, targetLang, onProgress) {
+  currentOnProgress = onProgress;
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
   const totalBatches = Math.ceil(allTexts.length / batchSize);
   const allTranslated = [];
 
-  console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + config.GITHUB_MODEL + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
+  console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + activeGithubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
   console.log(`[AI] Translating ${allTexts.length} lines in ${totalBatches} batches to ${targetLang}...`);
 
+  if (onProgress) onProgress({ log: `Starting API pipeline with engine: ${engine}` });
   if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
 
   for (let i = 0; i < totalBatches; i++) {
+    progressBatchTracker = i + 1;
     const start = i * batchSize;
     const end = Math.min(start + batchSize, allTexts.length);
     const batch = allTexts.slice(start, end);
@@ -295,14 +310,9 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
     console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end})...`);
     if (onProgress) onProgress({ batch: i + 1, totalBatches, status: 'translating', message: `מתרגם קבוצה ${i + 1} מתוך ${totalBatches}...` });
 
-    try {
-      const translated = await translateBatch(batch);
-      allTranslated.push(...translated);
-      console.log(`[AI]   ✅ Batch ${i + 1} done`);
-    } catch (error) {
-      console.error(`[AI]   ❌ Batch ${i + 1} failed: ${error.message}. Using originals.`);
-      allTranslated.push(...batch);
-    }
+    const translatedBatch = await translateBatch(batch);
+    allTranslated.push(...translatedBatch);
+    console.log(`[AI]   ✅ Batch ${i + 1} done`);
 
     // Delay between batches
     if (i < totalBatches - 1) {

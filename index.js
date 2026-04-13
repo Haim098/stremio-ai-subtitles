@@ -173,7 +173,11 @@ app.post('/api/generate', async (req, res) => {
   const { imdbId, type, title, poster, year } = req.body;
 
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
-  if (activeJobs.has(imdbId)) return res.json({ status: 'already_running' });
+  
+  // If already generating, don't start again
+  if (progressStore[imdbId] && progressStore[imdbId].status !== 'error' && progressStore[imdbId].status !== 'done') {
+    return res.json({ status: 'started' });
+  }
 
   // Check cache
   const existing = cache.getCached(imdbId, 'heb');
@@ -181,15 +185,13 @@ app.post('/api/generate', async (req, res) => {
 
   // Start generation in background
   activeJobs.add(imdbId);
-  progressStore[imdbId] = { status: 'starting', batch: 0, totalBatches: 0, message: 'מתחיל...' };
+  progressStore[imdbId] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, logs: [] };
   res.json({ status: 'started' });
 
   // Background work
   (async () => {
     try {
       // Step 1: Download English subtitles
-      progressStore[imdbId] = { status: 'downloading', batch: 0, totalBatches: 0, message: 'מוריד כתוביות מקוריות מ-OpenSubtitles...' };
-      
       const englishSrt = await getEnglishSubtitles(imdbId.replace('tt', ''), type || 'movie');
       if (!englishSrt) {
         progressStore[imdbId] = { status: 'error', message: 'לא נמצאו כתוביות אנגליות לסרט זה' };
@@ -205,14 +207,22 @@ app.post('/api/generate', async (req, res) => {
       }
 
       cache.setOriginalCached(imdbId, englishSrt);
-      progressStore[imdbId] = { status: 'parsing', batch: 0, totalBatches: 0, message: `נמצאו ${validation.blockCount} בלוקים. מנתח...` };
-
+      
       // Step 2: Parse
       const blocks = srtParser.parse(englishSrt);
       const texts = srtParser.extractTexts(blocks);
 
       // Step 3: Translate with progress callback
-      const onProgress = (p) => { progressStore[imdbId] = p; };
+      const onProgress = (update) => {
+        progressStore[imdbId].status = update.status || progressStore[imdbId].status;
+        progressStore[imdbId].batch = update.batch;
+        progressStore[imdbId].totalBatches = update.totalBatches;
+        progressStore[imdbId].message = update.message;
+        if (update.log) {
+          progressStore[imdbId].logs = progressStore[imdbId].logs || [];
+          progressStore[imdbId].logs.push(update.log);
+        }
+      };
       const translatedTexts = await translateAllTexts(texts, 'heb', onProgress);
 
       // Step 4: Rebuild SRT
@@ -241,20 +251,21 @@ app.post('/api/generate', async (req, res) => {
 // ─── API: Progress SSE stream ───────────────────────────
 app.get('/api/progress/:imdbId', (req, res) => {
   const { imdbId } = req.params;
-  res.setHeader('Content-Type', 'text/event-stream');
+  
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.flushHeaders();
+
+  const sendData = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   const interval = setInterval(() => {
-    const progress = progressStore[imdbId] || { status: 'unknown', message: 'אין מידע' };
-    res.write(`data: ${JSON.stringify(progress)}\n\n`);
+    const progress = progressStore[imdbId] || { status: 'unknown' };
+    sendData(progress);
     if (progress.status === 'done' || progress.status === 'error') {
       clearInterval(interval);
-      setTimeout(() => res.end(), 1000);
+      res.end();
     }
-  }, 800);
+  }, 1000);
 
   req.on('close', () => clearInterval(interval));
 });

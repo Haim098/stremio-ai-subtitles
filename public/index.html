@@ -336,8 +336,25 @@
       transition: width 0.5s ease;
       box-shadow: 0 0 10px var(--accent-glow);
     }
-    .modal .batch-info { color: var(--text-muted); font-size: 0.85rem; }
+    .modal .batch-info { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 20px; }
     .modal .done-icon { font-size: 3rem; margin-bottom: 10px; }
+    
+    .modal-logs {
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      height: 120px;
+      overflow-y: auto;
+      text-align: left;
+      font-family: monospace;
+      font-size: 0.75rem;
+      direction: ltr;
+      color: #0f0;
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+      margin-top: 15px;
+    }
+    .modal-logs div { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px; }
 
     @media (max-width: 600px) {
       .header h1 { font-size: 2rem; }
@@ -394,6 +411,7 @@
         <div class="big-progress-fill" id="modalProgressBar" style="width: 0%"></div>
       </div>
       <div class="batch-info" id="modalBatch"></div>
+      <div class="modal-logs" id="modalLogs"></div>
     </div>
   </div>
 
@@ -526,6 +544,7 @@
       document.getElementById('modalMessage').textContent = 'מתחיל...';
       document.getElementById('modalProgressBar').style.width = '0%';
       document.getElementById('modalBatch').textContent = '';
+      document.getElementById('modalLogs').innerHTML = '';
       document.getElementById('progressModal').classList.add('active');
     }
 
@@ -537,6 +556,17 @@
         const modal = document.getElementById('progressModal');
 
         document.getElementById('modalMessage').textContent = p.message || '';
+
+        // Render logs
+        if (p.logs && p.logs.length > 0) {
+          const logHtml = p.logs.map(logMsg => `<div>${logMsg}</div>`).join('');
+          const logsEl = document.getElementById('modalLogs');
+          // Only update if changed
+          if (logsEl.childElementCount !== p.logs.length) {
+            logsEl.innerHTML = logHtml;
+            logsEl.scrollTo(0, logsEl.scrollHeight);
+          }
+        }
 
         if (p.status === 'downloading') {
           document.getElementById('modalProgressBar').style.width = '5%';
@@ -560,7 +590,7 @@
           btn.disabled = false;
           source.close();
           loadLibrary();
-          setTimeout(() => modal.classList.remove('active'), 3000);
+          setTimeout(() => modal.classList.remove('active'), 5000); // 5 sec to let them read logs
         } else if (p.status === 'error') {
           document.getElementById('modalIcon').textContent = '❌';
           document.getElementById('modalTitle').textContent = 'שגיאה';
@@ -569,7 +599,7 @@
           btn.disabled = false;
           btn.textContent = '🎯 צור כתוביות עבריות';
           source.close();
-          setTimeout(() => modal.classList.remove('active'), 4000);
+          setTimeout(() => modal.classList.remove('active'), 8000);
         }
       };
 
