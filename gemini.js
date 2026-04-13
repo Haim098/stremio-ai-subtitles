@@ -128,13 +128,19 @@ async function translateBatchGitHub(textLines) {
 
     if (response.status === 400) {
       const errText = await response.text();
-      console.error(`[GitHub] Content filter (400): ${errText.slice(0, 200)}`);
+      console.error(`[GitHub] 400 Error: ${errText.slice(0, 200)}`);
+      if (errText.toLowerCase().includes('model') || errText.toLowerCase().includes('invalid')) {
+        throw { status: 400, unrecoverableModel: true };
+      }
       throw { status: 400, contentFilter: true };
     }
 
     if (!response.ok) {
       const errText = await response.text();
       console.error(`[GitHub] API Error ${response.status}: ${errText.slice(0, 300)}`);
+      if ([401, 403, 404].includes(response.status)) {
+        throw { status: response.status, unrecoverableModel: true };
+      }
       throw new Error(`GitHub Models API error: ${response.status}`);
     }
 
@@ -232,6 +238,26 @@ async function translateBatch(textLines) {
         return await translateBatchGemini(textLines);
       }
     } catch (error) {
+      if (error.unrecoverableModel) {
+        logToUI(`[AI] 🚨 Model ${activeGithubModel} rejected access (${error.status})! Dropping it...`);
+        if (engine === 'github') {
+          activeGithubModelIndex++;
+          if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
+            activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
+            logToUI(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
+            continue; // retry immediately with next GitHub model
+          } else if (config.GEMINI_API_KEY) {
+            logToUI('[AI] 🔄 GitHub Models exhausted/unauthorized! Swapping engine entirely to Gemini!');
+            activeEngine = 'gemini';
+            engine = 'gemini';
+            continue; // retry immediately with Gemini
+          } else {
+            logToUI('[AI] ❌ No fallback options left! Skipping this batch.');
+            return textLines;
+          }
+        }
+      }
+
       if (error.status === 429) {
         const delay = error.retryDelay || 15000;
         
