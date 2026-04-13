@@ -109,7 +109,7 @@ async function translateBatchGitHub(textLines) {
         'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
       },
       body: JSON.stringify({
-        model: activeGithubModel || config.GITHUB_MODEL,
+        model: activeGithubModel || config.GITHUB_MODELS_QUEUE[0],
         messages: [
           { role: 'system', content: getSystemPrompt() },
           { role: 'user', content: buildUserPrompt(textLines) },
@@ -192,11 +192,12 @@ async function translateBatchGemini(textLines) {
  * Determine which engine to use
  */
 let activeEngine = null;
+let activeGithubModelIndex = 0;
 let activeGithubModel = null;
 
 function getEngine() {
   if (!activeGithubModel && config.GITHUB_TOKEN) {
-    activeGithubModel = config.GITHUB_MODEL;
+    activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
   }
   if (activeEngine) return activeEngine;
   if (config.GITHUB_TOKEN) return activeEngine = 'github';
@@ -226,18 +227,24 @@ async function translateBatch(textLines) {
         if (delay > 60000) {
           console.warn(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting fallback...`);
           
-          if (engine === 'github' && activeGithubModel === config.GITHUB_MODEL && config.GITHUB_FALLBACK_MODEL) {
-            console.warn(`[AI] 🔄 Swapping GitHub model to secondary: ${config.GITHUB_FALLBACK_MODEL}`);
-            activeGithubModel = config.GITHUB_FALLBACK_MODEL;
-            continue; // retry immediately with secondary GitHub model
-          } else if (engine === 'github' && config.GEMINI_API_KEY) {
-            console.warn('[AI] 🔄 Swapping engine completely to Gemini!');
-            activeEngine = 'gemini';
-            engine = 'gemini';
-            continue; // retry immediately with Gemini
+          if (engine === 'github') {
+            activeGithubModelIndex++;
+            if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
+              activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
+              console.warn(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
+              continue; // retry immediately with next GitHub model
+            } else if (config.GEMINI_API_KEY) {
+              console.warn('[AI] 🔄 GitHub Models exhausted! Swapping engine entirely to Gemini!');
+              activeEngine = 'gemini';
+              engine = 'gemini';
+              continue; // retry immediately with Gemini
+            } else {
+              console.warn('[AI] ❌ No fallback options left! Skipping this batch.');
+              return textLines; // Use originals instead of freezing the server
+            }
           } else {
-            console.warn('[AI] ❌ No fallback options left! Skipping this batch.');
-            return textLines; // Use originals instead of freezing the server
+            console.warn('[AI] ❌ No fallback options left for this engine! Skipping this batch.');
+            return textLines;
           }
         }
 
