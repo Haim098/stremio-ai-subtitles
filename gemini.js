@@ -242,9 +242,24 @@ function advanceGithubModel(reason) {
   return false;
 }
 
+
+// ═══════════════════════════════════════════════════════
+//  Direct single-attempt translate (used by content filter micro-batches)
+// ═══════════════════════════════════════════════════════
+
+async function translateBatchDirect(textLines) {
+  const engine = activeEngine || 'github';
+  if (engine === 'github') {
+    return await translateBatchGitHub(textLines);
+  } else {
+    return await translateBatchGemini(textLines);
+  }
+}
+
 // ═══════════════════════════════════════════════════════
 //  Unified translate with bulletproof fallback
 // ═══════════════════════════════════════════════════════
+
 
 async function translateBatch(textLines) {
   let engine = getEngine();
@@ -293,8 +308,34 @@ async function translateBatch(textLines) {
       
       // ── Content filter ──
       if (error.contentFilter) {
-        logToUI(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
-        return textLines;
+        // If batch is already small (≤30 lines), give up on it
+        if (textLines.length <= 30) {
+          logToUI(`[AI] ⚠️ Content filter blocked micro-batch (${textLines.length} lines). Using originals.`);
+          return textLines;
+        }
+        
+        // Split into smaller sub-batches and retry each
+        const SUB_SIZE = 25;
+        const subBatches = [];
+        for (let s = 0; s < textLines.length; s += SUB_SIZE) {
+          subBatches.push(textLines.slice(s, s + SUB_SIZE));
+        }
+        
+        logToUI(`[AI] 🔄 Content filter blocked ${textLines.length} lines. Splitting into ${subBatches.length} micro-batches of ~${SUB_SIZE}...`);
+        
+        const allResults = [];
+        for (let si = 0; si < subBatches.length; si++) {
+          try {
+            logToUI(`[AI]   ↳ Micro-batch ${si + 1}/${subBatches.length} (${subBatches[si].length} lines)...`);
+            const subResult = await translateBatchDirect(subBatches[si]);
+            allResults.push(...subResult);
+          } catch (subErr) {
+            logToUI(`[AI]   ↳ ⚠️ Micro-batch ${si + 1} also blocked. Keeping originals for these ${subBatches[si].length} lines.`);
+            allResults.push(...subBatches[si]); // use originals for this sub-batch only
+          }
+          await sleep(1500); // small delay between micro-batches
+        }
+        return allResults;
       }
       
       // ── Network / unknown error ──
