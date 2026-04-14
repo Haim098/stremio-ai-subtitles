@@ -126,18 +126,30 @@ function rebuildFromDisk() {
       // Parse filename: something_lang.srt
       const match = file.match(/^(.+)_(heb|eng|ara|fre|spa|ger|rus)\.srt$/);
       if (match) {
-        const idPart = match[1]; // could be tt1234567 or sanitized title
+        const idPart = match[1]; // e.g. "tt1234567" or "tt1234567_1_5"
         const lang = match[2];
 
-        // Try to find the IMDB ID in the filename
-        const imdbMatch = idPart.match(/(tt\d+)/);
-        if (imdbMatch) {
-          const imdbId = imdbMatch[1];
-          const key = getCacheKey(imdbId, lang);
-          if (!translatedCache.has(key)) {
-            translatedCache.set(key, { filename: file, createdAt: Date.now() });
-            restored++;
-          }
+        // Try to extract IMDB ID + optional season/episode
+        // Pattern: tt1234567_1_5 → tt1234567:1:5 (series episode)
+        // Pattern: tt1234567     → tt1234567      (movie)
+        const seriesMatch = idPart.match(/(tt\d+)_(\d+)_(\d+)/);
+        const movieMatch = idPart.match(/(tt\d+)/);
+        
+        let contentId;
+        if (seriesMatch) {
+          // Series episode: reconstruct tt1234567:season:episode
+          contentId = `${seriesMatch[1]}:${seriesMatch[2]}:${seriesMatch[3]}`;
+        } else if (movieMatch) {
+          // Movie: just tt1234567
+          contentId = movieMatch[1];
+        } else {
+          continue; // skip files we can't parse
+        }
+
+        const key = getCacheKey(contentId, lang);
+        if (!translatedCache.has(key)) {
+          translatedCache.set(key, { filename: file, createdAt: Date.now() });
+          restored++;
         }
       }
     }
