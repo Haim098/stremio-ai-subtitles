@@ -9,7 +9,7 @@ module.exports = {
   // ─── GitHub Models API (Primary translation engine) ────
   GITHUB_TOKEN: process.env.GITHUB_TOKEN || '',
   GITHUB_MODELS_URL: 'https://models.github.ai/inference',
-  GITHUB_MODELS_QUEUE: ['openai/gpt-4.1', 'openai/gpt-5-mini', 'openai/gpt-4o'],
+  GITHUB_MODELS_QUEUE: ['openai/gpt-4.1', 'openai/gpt-4o', 'openai/gpt-5-mini', 'openai/gpt-4o-mini'],
 
   // ─── Gemini API (Fallback) ─────────────────────────────
   GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',

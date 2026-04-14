@@ -1,24 +1,48 @@
 /**
- * AI Translation Engine v2.1 — GitHub Models API
+ * AI Translation Engine v3.0 — GitHub Models API
  * ================================================
  * Uses GitHub Models API (OpenAI-compatible) for subtitle translation.
- * Falls back to Gemini if GitHub token is not configured.
- * Translates text in batches, preserving SRT structure.
+ * Falls back through a model queue, then to Gemini if all GitHub models fail.
+ * 
+ * KEY FIXES (v3.0):
+ * - gpt-5 family compatibility (max_completion_tokens, no temperature)
+ * - Instant model-skip on 400/401/403/404/500 (not just 429)
+ * - Per-batch model state reset prevention
  */
 
 const fetch = require('node-fetch');
 const config = require('./config');
 
-/**
- * Sleep helper
- */
+// ─── State ──────────────────────────────────────────────
+let activeEngine = null;
+let activeGithubModelIndex = 0;
+let activeGithubModel = null;
+let currentOnProgress = null;
+let progressBatchTracker = 0;
+
+// ─── Helpers ────────────────────────────────────────────
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function logToUI(msg) {
+  console.warn(msg);
+  if (currentOnProgress) {
+    currentOnProgress({ status: 'translating', log: msg, batch: progressBatchTracker });
+  }
+}
+
 /**
- * Build the system prompt for translation
+ * Determine if a model belongs to the gpt-5 family
+ * These models have different API constraints:
+ *   - Use max_completion_tokens instead of max_tokens
+ *   - Only support temperature=1 (default)
  */
+function isGpt5Family(modelName) {
+  return modelName && modelName.includes('gpt-5');
+}
+
+// ─── Prompts ────────────────────────────────────────────
 function getSystemPrompt() {
   return `You are a professional subtitle translator specializing in translating from English to Hebrew.
 
@@ -35,17 +59,12 @@ STRICT RULES:
 10. Use natural spoken Hebrew, not formal/literary Hebrew`;
 }
 
-/**
- * Build the user prompt for a batch
- */
 function buildUserPrompt(textLines) {
   const numberedLines = textLines.map((line, i) => `${i + 1}| ${line}`).join('\n');
   return `Translate these ${textLines.length} subtitle lines to Hebrew. Return the same numbered format:\n\n${numberedLines}`;
 }
 
-/**
- * Parse response — extract numbered translations
- */
+// ─── Response Parser ────────────────────────────────────
 function parseResponse(responseText, expectedCount) {
   const lines = responseText.trim().split('\n');
   const translations = new Array(expectedCount).fill('');
@@ -68,7 +87,7 @@ function parseResponse(responseText, expectedCount) {
     if (cleanLines.length >= expectedCount) {
       for (let i = 0; i < expectedCount; i++) {
         if (!translations[i]) {
-          translations[i] = cleanLines[i].replace(/^\d+\s*[|.):]\s*/, '').trim();
+          translations[i] = cleanLines[i].replace(/^\d+\s*[|.):\-]\s*/, '').trim();
         }
       }
     }
@@ -77,76 +96,71 @@ function parseResponse(responseText, expectedCount) {
   return translations;
 }
 
-/**
- * Extract retry delay from error response
- */
-function getRetryDelay(errorText) {
-  try {
-    const data = JSON.parse(errorText);
-    const retryInfo = data?.error?.details?.find(d => d['@type']?.includes('RetryInfo'));
-    if (retryInfo?.retryDelay) {
-      const seconds = parseFloat(retryInfo.retryDelay);
-      if (!isNaN(seconds)) return Math.ceil(seconds * 1000);
-    }
-  } catch (e) { /* ignore */ }
-  return 15000; // default 15s
-}
-
 // ═══════════════════════════════════════════════════════
 //  GitHub Models API (Primary)
 // ═══════════════════════════════════════════════════════
 
 async function translateBatchGitHub(textLines) {
+  const model = activeGithubModel || config.GITHUB_MODELS_QUEUE[0];
   const url = `${config.GITHUB_MODELS_URL}/chat/completions`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+  const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
   try {
+    // Build request body — adapt to model family
+    const body = {
+      model,
+      messages: [
+        { role: 'system', content: getSystemPrompt() },
+        { role: 'user', content: buildUserPrompt(textLines) },
+      ],
+    };
+
+    if (isGpt5Family(model)) {
+      // gpt-5 family: no temperature override, use max_completion_tokens
+      body.max_completion_tokens = 16384;
+    } else {
+      body.temperature = 0.3;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
-        'User-Agent': 'Stremio-AI-Subtitles/3.5'
+        'User-Agent': 'Stremio-AI-Subtitles/4.0',
       },
-      body: JSON.stringify({
-        model: activeGithubModel || config.GITHUB_MODELS_QUEUE[0],
-        messages: [
-          { role: 'system', content: getSystemPrompt() },
-          { role: 'user', content: buildUserPrompt(textLines) },
-        ],
-        temperature: 0.3,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
-    if (response.status === 429) {
-      const retryAfter = response.headers.get('retry-after');
-      const delay = retryAfter ? parseInt(retryAfter) * 1000 : 15000;
-      throw { status: 429, retryDelay: delay };
-    }
-
-    if (response.status === 400) {
-      const errText = await response.text();
-      console.error(`[GitHub] 400 Error: ${errText.slice(0, 200)}`);
-      if (errText.toLowerCase().includes('model') || errText.toLowerCase().includes('invalid')) {
-        throw { status: 400, unrecoverableModel: true };
-      }
-      throw { status: 400, contentFilter: true };
-    }
-
+    // ── Handle non-OK responses ──
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`[GitHub] API Error ${response.status}: ${errText.slice(0, 300)}`);
-      if ([401, 403, 404].includes(response.status)) {
-        throw { status: response.status, unrecoverableModel: true };
+      const status = response.status;
+      
+      if (status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const delay = retryAfter ? parseInt(retryAfter) * 1000 : 15000;
+        throw { status: 429, retryDelay: delay, message: `Rate limited (429)` };
       }
-      throw new Error(`GitHub Models API error: ${response.status}`);
+      
+      // Content filter
+      if (status === 400 && errText.includes('content_filter')) {
+        throw { status: 400, contentFilter: true, message: `Content filter (400)` };
+      }
+
+      // Any other error: model-level failure — trigger instant skip
+      throw { 
+        status, 
+        modelFailure: true, 
+        message: `GitHub API error ${status}: ${errText.slice(0, 200)}` 
+      };
     }
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content;
-    if (!content) throw new Error('No content in GitHub response');
+    if (!content) throw { modelFailure: true, message: 'No content in GitHub response' };
 
     return parseResponse(content, textLines.length);
   } finally {
@@ -176,7 +190,7 @@ async function translateBatchGemini(textLines) {
 
   if (response.status === 429) {
     const errText = await response.text();
-    throw { status: 429, retryDelay: getRetryDelay(errText) };
+    throw { status: 429, retryDelay: 15000, message: 'Gemini rate limited' };
   }
 
   if (!response.ok) {
@@ -192,15 +206,8 @@ async function translateBatchGemini(textLines) {
 }
 
 // ═══════════════════════════════════════════════════════
-//  Unified translate function with retry
+//  Engine selection
 // ═══════════════════════════════════════════════════════
-
-/**
- * Determine which engine to use
- */
-let activeEngine = null;
-let activeGithubModelIndex = 0;
-let activeGithubModel = null;
 
 function getEngine() {
   if (!activeGithubModel && config.GITHUB_TOKEN) {
@@ -212,25 +219,38 @@ function getEngine() {
   throw new Error('No AI API configured! Set GITHUB_TOKEN or GEMINI_API_KEY');
 }
 
-let currentOnProgress = null;
-
-function logToUI(msg) {
-  console.warn(msg);
-  if (currentOnProgress) {
-    currentOnProgress({ status: 'translating', log: msg, batch: progressBatchTracker });
+/**
+ * Advance to the next GitHub model in the queue.
+ * Returns true if a new model is available, false if queue is exhausted.
+ */
+function advanceGithubModel(reason) {
+  activeGithubModelIndex++;
+  if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
+    activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
+    logToUI(`[AI] 🔄 Skipping failed model → now using: ${activeGithubModel} (reason: ${reason})`);
+    return true;
   }
+  
+  // All GitHub models exhausted — try Gemini
+  if (config.GEMINI_API_KEY) {
+    logToUI('[AI] 🔄 All GitHub Models exhausted! Switching to Gemini engine.');
+    activeEngine = 'gemini';
+    return true;
+  }
+  
+  logToUI('[AI] ❌ No models left in queue and no Gemini fallback configured!');
+  return false;
 }
 
-let progressBatchTracker = 0;
+// ═══════════════════════════════════════════════════════
+//  Unified translate with bulletproof fallback
+// ═══════════════════════════════════════════════════════
 
-/**
- * Translate a batch with retry logic and smart fallback
- */
 async function translateBatch(textLines) {
   let engine = getEngine();
-  const maxRetries = config.MAX_RETRIES;
+  const MAX_ATTEMPTS = 8; // generous to allow model-switches within
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       if (engine === 'github') {
         return await translateBatchGitHub(textLines);
@@ -238,83 +258,75 @@ async function translateBatch(textLines) {
         return await translateBatchGemini(textLines);
       }
     } catch (error) {
-      if (error.unrecoverableModel) {
-        logToUI(`[AI] 🚨 Model ${activeGithubModel} rejected access (${error.status})! Dropping it...`);
-        if (engine === 'github') {
-          activeGithubModelIndex++;
-          if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
-            activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
-            logToUI(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
-            continue; // retry immediately with next GitHub model
-          } else if (config.GEMINI_API_KEY) {
-            logToUI('[AI] 🔄 GitHub Models exhausted/unauthorized! Swapping engine entirely to Gemini!');
-            activeEngine = 'gemini';
-            engine = 'gemini';
-            continue; // retry immediately with Gemini
-          } else {
-            logToUI('[AI] ❌ No fallback options left! Skipping this batch.');
-            return textLines;
-          }
+      
+      // ── Model-level failure (400/401/403/404/500/empty) ──
+      // Instantly skip to the next model — no retries on the same broken model
+      if (error.modelFailure) {
+        logToUI(`[AI] ⚠️ Model failure on ${activeGithubModel}: ${error.message}`);
+        if (engine === 'github' && advanceGithubModel(error.message)) {
+          engine = activeEngine; // might have switched to 'gemini'
+          continue; // retry immediately with next model
         }
+        logToUI('[AI] ❌ All engines exhausted. Using original text for this batch.');
+        return textLines;
       }
 
+      // ── Rate limit (429) ──
       if (error.status === 429) {
         const delay = error.retryDelay || 15000;
         
-        // Hard rate limit logic (> 60s)
+        // Hard rate limit (>60s wait) → skip model
         if (delay > 60000) {
-          logToUI(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s)! Attempting fallback...`);
-          
-          if (engine === 'github') {
-            activeGithubModelIndex++;
-            if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
-              activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
-              logToUI(`[AI] 🔄 Swapping GitHub model to: ${activeGithubModel}`);
-              continue; // retry immediately with next GitHub model
-            } else if (config.GEMINI_API_KEY) {
-              logToUI('[AI] 🔄 GitHub Models exhausted! Swapping engine entirely to Gemini!');
-              activeEngine = 'gemini';
-              engine = 'gemini';
-              continue; // retry immediately with Gemini
-            } else {
-              logToUI('[AI] ❌ No fallback options left! Skipping this batch.');
-              return textLines; // Use originals instead of freezing the server
-            }
-          } else {
-            logToUI('[AI] ❌ No fallback options left for this engine! Skipping this batch.');
-            return textLines;
+          logToUI(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s). Skipping model...`);
+          if (engine === 'github' && advanceGithubModel('Hard rate limit ' + delay + 'ms')) {
+            engine = activeEngine;
+            continue;
           }
+          return textLines;
         }
-
-        logToUI(`[AI] ⏳ Rate limited. Attempt ${attempt}/${maxRetries}. Waiting ${Math.round(delay / 1000)}s...`);
+        
+        // Soft rate limit — wait and retry same model
+        logToUI(`[AI] ⏳ Rate limited. Waiting ${Math.round(delay / 1000)}s (attempt ${attempt})...`);
         await sleep(delay + 1000);
         continue;
       }
       
-      // Content filter — skip this batch entirely, use originals
+      // ── Content filter ──
       if (error.contentFilter) {
         logToUI(`[AI] ⚠️ Content filter blocked batch (${textLines.length} lines). Using originals.`);
         return textLines;
       }
       
-      if (attempt === maxRetries) {
-        logToUI(`[AI] ❌ Max retries reached or hard failure. Using originals.`);
+      // ── Network / unknown error ──
+      if (attempt >= 3) {
+        // After 3 network failures, try next model instead of retrying forever
+        logToUI(`[AI] ⚠️ Network error x${attempt}: ${error.message}. Trying next model...`);
+        if (engine === 'github' && advanceGithubModel('Repeated network errors')) {
+          engine = activeEngine;
+          continue;
+        }
         return textLines;
       }
       
-      logToUI(`[AI] Error on attempt ${attempt}: ${error.message || 'unknown'}. Retrying...`);
+      logToUI(`[AI] ⚠️ Error attempt ${attempt}: ${error.message || 'unknown'}. Retrying in 3s...`);
       await sleep(3000);
     }
   }
   
-  return textLines; // Fallback to originals
+  return textLines; // Ultimate fallback to originals
 }
 
-/**
- * Translate all subtitle texts in batches
- */
+// ═══════════════════════════════════════════════════════
+//  Batch orchestrator
+// ═══════════════════════════════════════════════════════
+
 async function translateAllTexts(allTexts, targetLang, onProgress) {
+  // Reset state for each new translation job
+  activeEngine = null;
+  activeGithubModelIndex = 0;
+  activeGithubModel = null;
   currentOnProgress = onProgress;
+  
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
@@ -322,9 +334,10 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
   const allTranslated = [];
 
   console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + activeGithubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
+  console.log(`[AI] Model queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')} → Gemini`);
   console.log(`[AI] Translating ${allTexts.length} lines in ${totalBatches} batches to ${targetLang}...`);
 
-  if (onProgress) onProgress({ log: `Starting API pipeline with engine: ${engine}` });
+  if (onProgress) onProgress({ log: `🚀 Starting with: ${activeGithubModel || config.GEMINI_MODEL} | Queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')}` });
   if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
 
   for (let i = 0; i < totalBatches; i++) {
@@ -333,8 +346,9 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
     const end = Math.min(start + batchSize, allTexts.length);
     const batch = allTexts.slice(start, end);
 
-    console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end})...`);
-    if (onProgress) onProgress({ batch: i + 1, totalBatches, status: 'translating', message: `מתרגם קבוצה ${i + 1} מתוך ${totalBatches}...` });
+    const currentModel = activeEngine === 'gemini' ? 'Gemini' : (activeGithubModel || '?');
+    console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end}) via ${currentModel}...`);
+    if (onProgress) onProgress({ batch: i + 1, totalBatches, status: 'translating', message: `מתרגם קבוצה ${i + 1} מתוך ${totalBatches} (${currentModel})...` });
 
     const translatedBatch = await translateBatch(batch);
     allTranslated.push(...translatedBatch);
