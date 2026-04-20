@@ -17,6 +17,7 @@
   "author": "AI Subtitles Community",
   "license": "MIT",
   "dependencies": {
+    "adm-zip": "^0.5.17",
     "dotenv": "^17.4.2",
     "node-fetch": "^2.7.0",
     "stremio-addon-sdk": "^1.6.10"

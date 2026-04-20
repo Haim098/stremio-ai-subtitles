@@ -1,9 +1,10 @@
 /**
- * Stremio AI Subtitles Add-on v3
- * ===============================
+ * Stremio AI Subtitles Add-on v3.1
+ * ==================================
  * Web UI for subtitle generation + Cache-only Stremio handler.
- * Users search movies, generate translations via web UI,
- * then subtitles appear automatically in Stremio.
+ * v3.1: multi-provider subtitle sources (OpenSubtitles + SubDL).
+ * Users pick a source, then a specific variant; each variant is
+ * cached separately so multiple translations coexist per title.
  */
 
 const express = require('express');
@@ -13,7 +14,7 @@ const fetch = require('node-fetch');
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 
 const config = require('./config');
-const { getEnglishSubtitles } = require('./opensubtitles');
+const { listProviders, getProvider, hasAnyEnabled } = require('./providers');
 const { translateAllTexts } = require('./gemini');
 const srtParser = require('./srtParser');
 const cache = require('./subtitleCache');
@@ -32,10 +33,17 @@ function loadLibrary() {
 function saveLibrary(lib) {
   fs.writeFileSync(libraryPath, JSON.stringify(lib, null, 2));
 }
+// Unique key per library row — one row per (content, provider).
+function libraryKey(imdbId, provider) {
+  return `${imdbId}::${provider || cache.DEFAULT_LEGACY_PROVIDER}`;
+}
 
-// ─── Progress tracking ──────────────────────────────────
+// ─── Progress tracking (per (content, provider)) ────────
 const progressStore = {};
 const activeJobs = new Set();
+function jobKey(contentId, provider) {
+  return `${contentId}::${provider}`;
+}
 
 // ─── Base URL ────────────────────────────────────────────
 function getBaseUrl() {
@@ -68,19 +76,23 @@ builder.defineSubtitlesHandler(async function(args) {
   const baseUrl = getBaseUrl();
   const subtitles = [];
 
-  for (const lang of config.SUPPORTED_LANGUAGES) {
-    const filename = cache.getCached(args.id, lang.code);
-    if (filename) {
-      subtitles.push({
-        id: `aisub-${lang.code}-${imdbId}`,
-        url: `${baseUrl}/public/subs/${filename}`,
-        lang: lang.code,
-      });
-    }
+  // Expose every cached (lang, provider) variant we have for this content.
+  const variants = cache.listVariantsForContent(args.id);
+  for (const v of variants) {
+    const lang = config.SUPPORTED_LANGUAGES.find(l => l.code === v.lang);
+    if (!lang) continue;
+    subtitles.push({
+      // Include provider in the id so Stremio treats them as distinct tracks
+      id: `aisub-${v.lang}-${v.provider}-${imdbId}`,
+      url: `${baseUrl}/public/subs/${v.filename}`,
+      lang: v.lang,
+      // Some Stremio clients surface this label; ignored by others.
+      name: `${lang.displayName} (${v.provider})`,
+    });
   }
 
   if (subtitles.length > 0) {
-    console.log(`[Stremio] ✅ Serving ${subtitles.length} cached subs for ${args.id}`);
+    console.log(`[Stremio] ✅ Serving ${subtitles.length} cached variants for ${args.id}`);
   }
 
   return { subtitles, cacheMaxAge: config.CACHE_MAX_AGE, staleRevalidate: config.STALE_REVALIDATE };
@@ -98,6 +110,11 @@ function extractInfo(id) {
 const app = express();
 app.use(express.json());
 app.use('/public', express.static(publicDir));
+
+// ─── API: List subtitle providers ───────────────────────
+app.get('/api/providers', (req, res) => {
+  res.json({ providers: listProviders() });
+});
 
 // ─── API: Search movies via TMDB ─────────────────────────
 app.get('/api/search', async (req, res) => {
@@ -177,80 +194,127 @@ app.get('/api/tv/:tmdbId/season/:season_number', async (req, res) => {
   }
 });
 
+// ─── API: List subtitle candidates from a provider ─────
+app.get('/api/subtitles/candidates', async (req, res) => {
+  const { imdbId, type, season, episode, provider: providerName } = req.query;
+  if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
+  if (!providerName) return res.status(400).json({ error: 'Missing provider' });
+
+  let provider;
+  try {
+    provider = getProvider(providerName);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (!provider.enabled) {
+    return res.status(400).json({ error: `Provider ${provider.displayName} is not configured (missing API key)` });
+  }
+
+  try {
+    const candidates = await provider.search(
+      imdbId,
+      type || 'movie',
+      season || null,
+      episode || null
+    );
+    // Attach provider tag for UI convenience
+    const enriched = candidates.map(c => ({ ...c, provider: provider.name }));
+    res.json({ provider: provider.name, candidates: enriched });
+  } catch (err) {
+    console.error(`[/candidates] error for ${providerName}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── API: Check subtitle status ─────────────────────────
 app.get('/api/status/:imdbId', (req, res) => {
   const { imdbId } = req.params;
-  const filename = cache.getCached(imdbId, 'heb');
-  const progress = progressStore[imdbId];
-  
+  const providerName = req.query.provider || cache.DEFAULT_LEGACY_PROVIDER;
+  const filename = cache.getCached(imdbId, 'heb', providerName);
+  const pkey = jobKey(imdbId, providerName);
+  const progress = progressStore[pkey];
+
   res.json({
     exists: !!filename,
     filename: filename || null,
     url: filename ? `${getBaseUrl()}/public/subs/${filename}` : null,
-    generating: activeJobs.has(imdbId),
+    generating: activeJobs.has(pkey),
     progress: progress || null,
   });
 });
 
 // ─── API: Start subtitle generation ─────────────────────
 app.post('/api/generate', async (req, res) => {
-  const { imdbId, type, title, poster, year, season, episode, force } = req.body;
+  const { imdbId, type, title, poster, year, season, episode, force, provider: providerName, variantId, variantRelease } = req.body;
 
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
-  
+  if (!providerName) return res.status(400).json({ error: 'Missing provider' });
+  if (!variantId) return res.status(400).json({ error: 'Missing variantId' });
+
+  let provider;
+  try {
+    provider = getProvider(providerName);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (!provider.enabled) {
+    return res.status(400).json({ error: `Provider ${provider.displayName} is not configured` });
+  }
+
   const isSeries = type === 'tv' || type === 'series';
   const contentId = isSeries && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
+  const pkey = jobKey(contentId, provider.name);
 
   // If already generating, don't start again
-  if (progressStore[contentId] && progressStore[contentId].status !== 'error' && progressStore[contentId].status !== 'done') {
+  if (progressStore[pkey] && progressStore[pkey].status !== 'error' && progressStore[pkey].status !== 'done') {
     return res.json({ status: 'started' });
   }
 
-  // Check cache FIRST (v3: memory + disk fallback)
-  const cachedPath = cache.getCached(contentId, 'heb');
+  // Check cache FIRST — per (content, provider)
+  const cachedPath = cache.getCached(contentId, 'heb', provider.name);
   if (cachedPath && !force) {
-    console.log(`[Stremio] WebUI Generate requested but already cached: ${contentId}`);
-    return res.json({ status: 'exists', filename: cachedPath });
+    console.log(`[Gen] Already cached for ${contentId} via ${provider.name}: ${cachedPath}`);
+    return res.json({ status: 'exists', filename: cachedPath, provider: provider.name });
   }
 
   // Start generation in background
-  activeJobs.add(contentId);
-  progressStore[contentId] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, logs: [] };
-  res.json({ status: 'started' });
+  activeJobs.add(pkey);
+  progressStore[pkey] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, provider: provider.name, logs: [] };
+  res.json({ status: 'started', provider: provider.name });
 
   // Background work
   (async () => {
     try {
-      // Step 1: Download English subtitles
-      const englishSrt = await getEnglishSubtitles(imdbId.replace('tt', ''), type || 'movie', season, episode);
+      // Step 1: Download English subtitles from the chosen provider + variant
+      const englishSrt = await provider.download(variantId);
       if (!englishSrt) {
-        progressStore[contentId] = { status: 'error', message: 'לא נמצאו כתוביות אנגליות לסרט זה' };
-        activeJobs.delete(contentId);
+        progressStore[pkey] = { status: 'error', message: 'לא התקבל תוכן כתוביות מהמקור', provider: provider.name };
+        activeJobs.delete(pkey);
         return;
       }
 
       const validation = srtParser.validate(englishSrt);
       if (!validation.valid) {
-        progressStore[contentId] = { status: 'error', message: 'קובץ כתוביות שגוי' };
-        activeJobs.delete(contentId);
+        progressStore[pkey] = { status: 'error', message: `קובץ כתוביות לא תקין: ${validation.error || 'unknown'}`, provider: provider.name };
+        activeJobs.delete(pkey);
         return;
       }
 
-      cache.setOriginalCached(contentId, englishSrt);
-      
+      cache.setOriginalCached(contentId, englishSrt, provider.name);
+
       // Step 2: Parse
       const blocks = srtParser.parse(englishSrt);
       const texts = srtParser.extractTexts(blocks);
 
       // Step 3: Translate with progress callback
       const onProgress = (update) => {
-        progressStore[contentId].status = update.status || progressStore[contentId].status;
-        progressStore[contentId].batch = update.batch;
-        progressStore[contentId].totalBatches = update.totalBatches;
-        progressStore[contentId].message = update.message;
+        progressStore[pkey].status = update.status || progressStore[pkey].status;
+        progressStore[pkey].batch = update.batch;
+        progressStore[pkey].totalBatches = update.totalBatches;
+        progressStore[pkey].message = update.message;
         if (update.log) {
-          progressStore[contentId].logs = progressStore[contentId].logs || [];
-          progressStore[contentId].logs.push(update.log);
+          progressStore[pkey].logs = progressStore[pkey].logs || [];
+          progressStore[pkey].logs.push(update.log);
         }
       };
       const translatedTexts = await translateAllTexts(texts, 'heb', onProgress);
@@ -258,23 +322,39 @@ app.post('/api/generate', async (req, res) => {
       // Step 4: Rebuild SRT
       const translatedBlocks = srtParser.replaceTexts(blocks, translatedTexts);
       const translatedSrt = srtParser.build(translatedBlocks);
-      const filename = cache.setCached(contentId, 'heb', translatedSrt, contentId);
+      const filename = cache.setCached(contentId, 'heb', translatedSrt, contentId, provider.name);
 
-      // Step 5: Update library
+      // Step 5: Update library (one row per (content, provider))
       const library = loadLibrary();
-      const displayTitle = isSeries ? `${title || imdbId} (S${season}E${episode})` : title || imdbId;
-      const entry = { imdbId: contentId, title: displayTitle, poster: poster || null, year: year || '', createdAt: new Date().toISOString(), filename };
-      const idx = library.findIndex(e => e.imdbId === contentId);
+      const displayTitle = isSeries ? `${title || imdbId} (S${season}E${episode})` : (title || imdbId);
+      const entry = {
+        imdbId: contentId,
+        libraryKey: libraryKey(contentId, provider.name),
+        title: displayTitle,
+        poster: poster || null,
+        year: year || '',
+        createdAt: new Date().toISOString(),
+        filename,
+        provider: provider.name,
+        providerDisplayName: provider.displayName,
+        variantRelease: variantRelease || null,
+      };
+      // Dedupe by libraryKey, falling back to the old (imdbId-only) shape
+      // for rows created before v3.1.
+      const idx = library.findIndex(e =>
+        e.libraryKey ? e.libraryKey === entry.libraryKey
+                     : (e.imdbId === contentId && (!e.provider || e.provider === provider.name))
+      );
       if (idx >= 0) library[idx] = entry; else library.unshift(entry);
       saveLibrary(library);
 
-      progressStore[contentId] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename, logs: progressStore[contentId].logs };
-      console.log(`[Generate] ✅ ${displayTitle} — subtitles ready`);
+      progressStore[pkey] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename, provider: provider.name, logs: progressStore[pkey].logs };
+      console.log(`[Generate] ✅ ${displayTitle} via ${provider.name} — subtitles ready`);
     } catch (err) {
-      console.error(`[Generate] ❌ ${contentId}:`, err.message);
-      progressStore[contentId] = { status: 'error', message: `שגיאה: ${err.message}`, logs: progressStore[contentId].logs };
+      console.error(`[Generate] ❌ ${pkey}:`, err.message);
+      progressStore[pkey] = { status: 'error', message: `שגיאה: ${err.message}`, provider: provider.name, logs: progressStore[pkey]?.logs || [] };
     } finally {
-      activeJobs.delete(contentId);
+      activeJobs.delete(pkey);
     }
   })();
 });
@@ -282,7 +362,9 @@ app.post('/api/generate', async (req, res) => {
 // ─── API: Progress SSE stream ───────────────────────────
 app.get('/api/progress/:imdbId', (req, res) => {
   const { imdbId } = req.params;
-  
+  const providerName = req.query.provider || cache.DEFAULT_LEGACY_PROVIDER;
+  const pkey = jobKey(imdbId, providerName);
+
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -290,7 +372,7 @@ app.get('/api/progress/:imdbId', (req, res) => {
   const sendData = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   const interval = setInterval(() => {
-    const progress = progressStore[imdbId] || { status: 'unknown' };
+    const progress = progressStore[pkey] || { status: 'unknown' };
     sendData(progress);
     if (progress.status === 'done' || progress.status === 'error') {
       clearInterval(interval);
@@ -318,14 +400,18 @@ app.use(getRouter(addonInterface));
 
 // ─── Start server ────────────────────────────────────────
 app.listen(config.PORT, () => {
-  const aiEngine = config.GITHUB_TOKEN ? `GitHub Models (${config.GITHUB_MODEL})` : `Gemini (${config.GEMINI_MODEL})`;
+  const aiEngine = config.GITHUB_TOKEN ? `GitHub Models (${config.GITHUB_MODELS_QUEUE.join(', ')})` : `Gemini (${config.GEMINI_MODEL})`;
+  const providers = listProviders().map(p => `${p.displayName}${p.enabled ? '' : ' (disabled)'}`).join(', ');
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  🎬 Stremio AI Translated Subtitles v3');
+  console.log('  🎬 Stremio AI Translated Subtitles v3.1');
   console.log(`  📡 Translation: ${aiEngine}`);
-  console.log('  📥 Source: OpenSubtitles.com');
+  console.log(`  📥 Sources: ${providers}`);
   console.log('  🌐 Web UI: Enabled');
   console.log('═══════════════════════════════════════════════════════════');
   console.log(`\n🚀 Server ready at http://localhost:${config.PORT}`);
   console.log(`   Web UI:    http://localhost:${config.PORT}/`);
   console.log(`   Manifest:  http://localhost:${config.PORT}/manifest.json\n`);
+  if (!hasAnyEnabled()) {
+    console.warn('⚠️  No subtitle providers are enabled! Check your .env (OPENSUBTITLES_* / SUBDL_API_KEY).');
+  }
 });

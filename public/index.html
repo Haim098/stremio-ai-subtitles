@@ -18,6 +18,7 @@
       --accent-glow: rgba(139, 92, 246, 0.3);
       --success: #22c55e;
       --error: #ef4444;
+      --warning: #f59e0b;
       --text-primary: #f1f5f9;
       --text-secondary: #94a3b8;
       --text-muted: #64748b;
@@ -34,7 +35,6 @@
       overflow-x: hidden;
     }
 
-    /* ── Background Effect ── */
     body::before {
       content: '';
       position: fixed;
@@ -52,7 +52,6 @@
 
     .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
 
-    /* ── Header ── */
     .header {
       text-align: center;
       padding: 50px 20px 30px;
@@ -72,7 +71,6 @@
       font-weight: 300;
     }
 
-    /* ── Search ── */
     .search-wrap {
       max-width: 600px;
       margin: 30px auto;
@@ -105,7 +103,6 @@
       color: var(--text-muted);
     }
 
-    /* ── Section Title ── */
     .section-title {
       font-size: 1.3rem;
       font-weight: 700;
@@ -116,7 +113,6 @@
     }
     .section-title span { color: var(--accent); }
 
-    /* ── Movie Grid ── */
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -164,11 +160,9 @@
       color: var(--text-muted);
       font-size: 0.8rem;
       margin-bottom: 10px;
+      flex-wrap: wrap;
     }
-    .card-rating {
-      color: #fbbf24;
-      font-weight: 600;
-    }
+    .card-rating { color: #fbbf24; font-weight: 600; }
     .card-type {
       background: rgba(139,92,246,0.2);
       color: var(--accent);
@@ -177,8 +171,19 @@
       font-size: 0.7rem;
       font-weight: 500;
     }
+    .provider-tag {
+      display: inline-block;
+      background: rgba(34,197,94,0.15);
+      color: var(--success);
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 500;
+      margin-top: 4px;
+    }
+    .provider-tag.opensubtitles { background: rgba(59,130,246,0.15); color: #3b82f6; }
+    .provider-tag.subdl { background: rgba(234,88,12,0.15); color: #ea580c; }
 
-    /* ── Buttons ── */
     .btn {
       width: 100%;
       padding: 10px;
@@ -201,8 +206,21 @@
       color: var(--success);
       cursor: default;
     }
-    
-    /* ── TV Selectors ── */
+    .btn-secondary {
+      background: rgba(255,255,255,0.06);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+    .btn-try-other {
+      background: rgba(245,158,11,0.12);
+      color: var(--warning);
+      margin-top: 6px;
+      font-size: 0.8rem;
+      padding: 7px;
+    }
+    .btn-try-other:hover { background: rgba(245,158,11,0.2); }
+
     .tv-select {
       width: 100%;
       padding: 8px;
@@ -224,8 +242,6 @@
       position: relative;
       overflow: hidden;
     }
-
-    /* ── Progress Bar ── */
     .progress-bar {
       position: absolute;
       bottom: 0;
@@ -236,7 +252,6 @@
       border-radius: 0 0 10px 10px;
     }
 
-    /* ── Loading ── */
     .loading {
       text-align: center;
       padding: 40px;
@@ -253,7 +268,6 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Empty State ── */
     .empty {
       text-align: center;
       padding: 60px 20px;
@@ -261,7 +275,6 @@
     }
     .empty-icon { font-size: 3rem; margin-bottom: 10px; }
 
-    /* ── Stremio Install Banner ── */
     .install-banner {
       background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(59,130,246,0.1));
       border: 1px solid rgba(139,92,246,0.2);
@@ -286,7 +299,6 @@
     }
     .install-url:hover { border-color: var(--accent); }
 
-    /* ── Footer ── */
     .footer {
       text-align: center;
       padding: 30px;
@@ -297,7 +309,6 @@
     }
     .footer img { height: 14px; vertical-align: middle; margin: 0 4px; }
 
-    /* ── Toast ── */
     .toast {
       position: fixed;
       bottom: 30px;
@@ -330,9 +341,11 @@
       background: var(--bg-secondary);
       border: 1px solid var(--border);
       border-radius: 20px;
-      padding: 40px;
-      max-width: 500px;
-      width: 90%;
+      padding: 32px;
+      max-width: 560px;
+      width: 92%;
+      max-height: 85vh;
+      overflow-y: auto;
       text-align: center;
     }
     .modal h3 { font-size: 1.3rem; margin-bottom: 8px; }
@@ -354,7 +367,6 @@
     }
     .modal .batch-info { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 20px; }
     .modal .done-icon { font-size: 3rem; margin-bottom: 10px; }
-    
     .modal-logs {
       background: #000;
       border: 1px solid var(--border);
@@ -372,6 +384,97 @@
     }
     .modal-logs div { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px; }
 
+    /* Source picker */
+    .source-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin: 24px 0;
+    }
+    .source-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      cursor: pointer;
+      transition: all 0.25s;
+      text-align: right;
+      color: var(--text-primary);
+      font-family: 'Heebo', sans-serif;
+      position: relative;
+    }
+    .source-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+      background: var(--bg-card-hover);
+      transform: translateX(-4px);
+    }
+    .source-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .source-btn-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .source-btn-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* Variant picker */
+    .variant-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: 20px 0;
+      text-align: right;
+    }
+    .variant-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .variant-row:hover {
+      border-color: var(--accent);
+      background: var(--bg-card-hover);
+      transform: translateX(-4px);
+    }
+    .variant-release {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      word-break: break-all;
+      margin-bottom: 6px;
+      direction: ltr;
+      text-align: left;
+    }
+    .variant-meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    .variant-meta span { white-space: nowrap; }
+    .variant-badge-hi {
+      background: rgba(245,158,11,0.15);
+      color: var(--warning);
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 0.7rem;
+    }
+
+    .modal-footer {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .modal-footer .btn { flex: 1; }
+
     @media (max-width: 600px) {
       .header h1 { font-size: 2rem; }
       .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
@@ -381,39 +484,62 @@
 <body>
 
   <div class="container">
-    <!-- Header -->
     <div class="header">
       <h1>🎬 כתוביות AI</h1>
-      <p>חפש סרט, צור כתוביות בעברית, צפה ב-Stremio</p>
+      <p>חפש סרט, בחר מקור, צור כתוביות בעברית, צפה ב-Stremio</p>
     </div>
 
-    <!-- Search -->
     <div class="search-wrap">
       <input type="text" class="search-input" id="searchInput" placeholder="חפש סרט או סדרה..." autocomplete="off">
       <div class="search-icon">🔍</div>
     </div>
 
-    <!-- Search Results -->
     <div id="searchResults"></div>
 
-    <!-- Library -->
     <div id="librarySection">
       <h2 class="section-title">📚 <span>ספריית כתוביות</span> — מוכנות לצפייה</h2>
       <div id="libraryGrid" class="grid"></div>
     </div>
 
-    <!-- Stremio Install -->
     <div class="install-banner">
       <h3>📲 התקנה ב-Stremio</h3>
       <p>פתח את Stremio → Add-ons → הדבק את הכתובת:</p>
       <div class="install-url" id="installUrl" onclick="copyInstallUrl()">טוען...</div>
     </div>
 
-    <!-- Footer -->
     <div class="footer">
-      AI Translated Subtitles v3 — נתוני סרטים מ-
+      AI Translated Subtitles v3.1 — נתוני סרטים מ-
       <img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" alt="TMDB">
       TMDB
+    </div>
+  </div>
+
+  <!-- Source Picker Modal -->
+  <div class="modal-overlay" id="sourceModal">
+    <div class="modal">
+      <h3>🎯 בחר מקור כתוביות</h3>
+      <p class="progress-text" id="sourceModalSubtitle">מאיזה אתר להוריד את כתוביות המקור (באנגלית)?</p>
+      <div class="source-list" id="sourceList">
+        <div class="loading"><div class="spinner"></div><br>טוען מקורות...</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSourceModal()">ביטול</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Variant Picker Modal -->
+  <div class="modal-overlay" id="variantModal">
+    <div class="modal">
+      <h3>📋 בחר וריאנט</h3>
+      <p class="progress-text" id="variantModalSubtitle">ממקור: <strong>...</strong></p>
+      <div class="variant-list" id="variantList">
+        <div class="loading"><div class="spinner"></div><br>מחפש וריאנטים...</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="backToSourcePicker()">← חזור למקורות</button>
+        <button class="btn btn-secondary" onclick="closeVariantModal()">ביטול</button>
+      </div>
     </div>
   </div>
 
@@ -438,11 +564,29 @@
     const BASE = window.location.origin;
     let searchTimeout;
 
+    // ── State: context for the current generation attempt ──
+    // Shape: { imdbId, tmdbId, type, title, poster, year, season, episode, force, uiBtn }
+    let pendingCtx = null;
+    // Providers list cached from /api/providers
+    let providers = [];
+
     // ── Init ──
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('installUrl').textContent = `${BASE}/manifest.json`;
+      await loadProviders();
       loadLibrary();
     });
+
+    async function loadProviders() {
+      try {
+        const res = await fetch(`${BASE}/api/providers`);
+        const data = await res.json();
+        providers = data.providers || [];
+      } catch (err) {
+        console.error('loadProviders error:', err);
+        providers = [];
+      }
+    }
 
     // ── Search ──
     document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -471,7 +615,6 @@
         container.innerHTML = `<h2 class="section-title">🔎 <span>תוצאות חיפוש</span></h2><div class="grid" id="searchGrid"></div>`;
         const grid = document.getElementById('searchGrid');
 
-        // Check status for all results
         for (const movie of data.results) {
           const card = createMovieCard(movie, false);
           grid.appendChild(card);
@@ -486,7 +629,7 @@
       card.className = 'card';
       const safeTitle = movie.title ? movie.title.replace(/"/g, '&quot;').replace(/'/g, '\\\'') : '';
       card.innerHTML = `
-        <img class="card-poster" src="${movie.poster}" alt="${safeTitle}" loading="lazy" 
+        <img class="card-poster" src="${movie.poster}" alt="${safeTitle}" loading="lazy"
              onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 200 300%22><rect fill=%22%231a1a2e%22 width=%22200%22 height=%22300%22/><text x=%2250%%22 y=%2250%%22 fill=%22%2364748b%22 text-anchor=%22middle%22 font-size=%2240%22>🎬</text></svg>'">
         <div class="card-info">
           <div class="card-title" title="${safeTitle}">${safeTitle}</div>
@@ -500,7 +643,7 @@
                   ${isLibrary ? '' : `onclick="handleGenerateClick(this)"`}>
             ${isLibrary ? '✅ כתוביות מוכנות' : (movie.type === 'tv' || movie.type === 'series' ? '🎯 בחר עונה ופרק' : '🎯 צור כתוביות עבריות')}
           </button>
-          
+
           ${!isLibrary && (movie.type === 'tv' || movie.type === 'series') ? `
             <div id="tv-ui-${movie.tmdbId}" style="display:none; margin-top:10px;">
               <select class="tv-select" id="season-${movie.tmdbId}" onchange="loadEpisodes(this.value, '${movie.tmdbId}')">
@@ -517,24 +660,23 @@
       return card;
     }
 
-    // ── Generate Logic ──
+    // ── Generate Logic (now triggers source picker) ──
     async function handleGenerateClick(btn) {
       if (btn.dataset.type === 'tv' || btn.dataset.type === 'series') {
         const tmdbId = btn.dataset.tmdb;
         document.getElementById(`btn-main-${tmdbId}`).style.display = 'none';
         document.getElementById(`tv-ui-${tmdbId}`).style.display = 'block';
-        
-        // Fetch seasons
+
         try {
           const res = await fetch(`${BASE}/api/tv/${tmdbId}`);
           const data = await res.json();
           const seasonSelect = document.getElementById(`season-${tmdbId}`);
-          
+
           if (!data.seasons || data.seasons.length === 0) {
             seasonSelect.innerHTML = '<option value="">לא נמצאו עונות</option>';
             return;
           }
-          
+
           let html = '<option value="">בחר עונה...</option>';
           data.seasons.filter(s => s.season_number > 0).forEach(s => {
             html += `<option value="${s.season_number}">עונה ${s.season_number}</option>`;
@@ -544,7 +686,7 @@
           console.error(err);
         }
       } else {
-        generateSubtitles(btn);
+        prepareGeneration(btn);
       }
     }
 
@@ -553,7 +695,7 @@
       const startBtn = document.getElementById(`btn-start-${tmdbId}`);
       epSelect.style.display = 'none';
       startBtn.style.display = 'none';
-      
+
       if (!season) return;
 
       epSelect.innerHTML = '<option value="">טוען פרקים...</option>';
@@ -562,7 +704,7 @@
       try {
         const res = await fetch(`${BASE}/api/tv/${tmdbId}/season/${season}`);
         const data = await res.json();
-        
+
         if (!data.episodes || data.episodes.length === 0) {
           epSelect.innerHTML = '<option value="">לא נמצאו פרקים</option>';
           return;
@@ -581,22 +723,15 @@
     function enableTvGenerate(tmdbId) {
       const epSelect = document.getElementById(`episode-${tmdbId}`);
       const btn = document.getElementById(`btn-start-${tmdbId}`);
-      if (epSelect.value) {
-        btn.style.display = 'block';
-      } else {
-        btn.style.display = 'none';
-      }
+      btn.style.display = epSelect.value ? 'block' : 'none';
     }
 
     function startTvGeneration(tmdbId, title, poster, year) {
       const season = document.getElementById(`season-${tmdbId}`).value;
       const episode = document.getElementById(`episode-${tmdbId}`).value;
       if (!season || !episode) return;
-      
+
       const btn = document.getElementById(`btn-start-${tmdbId}`);
-      
-      // We pass the parameters manually to generateSubtitles logic
-      // create a fake button element so we can reuse generateSubtitles code
       const fakeBtn = {
         dataset: { tmdb: tmdbId, type: 'tv', title, poster, year, season, episode },
         disabled: false,
@@ -604,29 +739,28 @@
         textContent: btn.textContent,
         style: btn.style
       };
-      
-      // Override the actual button text
-      btn.disabled = true;
-      btn.textContent = 'מחפש...';
-      
-      generateSubtitles(fakeBtn, btn); // Pass real btn reference to update UI properly
+      prepareGeneration(fakeBtn, btn);
     }
 
-    async function generateSubtitles(btnData, realBtnElement = null) {
+    /**
+     * Step 1: Resolve IMDB, stash pendingCtx, open source picker.
+     * This replaces the old direct /api/generate POST.
+     */
+    async function prepareGeneration(btnData, realBtnElement = null) {
       const tmdbId = btnData.dataset.tmdb;
       const type = btnData.dataset.type;
       const title = btnData.dataset.title;
       const poster = btnData.dataset.poster;
       const year = btnData.dataset.year;
-      const season = btnData.dataset.season; // Will be undefined for movies
+      const season = btnData.dataset.season;
       const episode = btnData.dataset.episode;
-      
+
       const uiBtn = realBtnElement || btnData;
       const force = uiBtn.dataset.force === 'true';
+      const originalText = uiBtn.textContent;
 
-      // Step 1: Get IMDB ID
       uiBtn.disabled = true;
-      uiBtn.textContent = 'מחפש...';
+      uiBtn.textContent = 'מחפש IMDB...';
 
       try {
         const imdbRes = await fetch(`${BASE}/api/imdb/${tmdbId}?type=${type}`);
@@ -634,69 +768,208 @@
         if (!imdbData.imdbId) {
           showToast('❌ לא נמצא IMDB ID לסרט זה');
           uiBtn.disabled = false;
-          uiBtn.textContent = type === 'tv' ? '✨ תרגם פרק זה' : '🎯 צור כתוביות עבריות';
+          uiBtn.textContent = originalText;
           return;
         }
 
-        const imdbId = imdbData.imdbId;
-        const progressId = (type === 'tv' || type === 'series') && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
+        pendingCtx = {
+          imdbId: imdbData.imdbId,
+          tmdbId, type, title, poster, year, season, episode, force,
+          uiBtn, originalText,
+        };
 
-        // Step 2: Start generation
+        uiBtn.textContent = originalText;
+        uiBtn.disabled = false;
+        openSourceModal();
+      } catch (err) {
+        showToast('❌ שגיאה: ' + err.message);
+        uiBtn.disabled = false;
+        uiBtn.textContent = originalText;
+      }
+    }
+
+    // ── Source Picker Modal ──
+    function openSourceModal() {
+      const list = document.getElementById('sourceList');
+      list.innerHTML = '';
+      if (!providers || providers.length === 0) {
+        list.innerHTML = '<div class="empty">לא הוגדרו מקורות. בדוק את קובץ .env</div>';
+      } else {
+        providers.forEach(p => {
+          const desc = p.name === 'opensubtitles'
+            ? 'מסד הנתונים הגדול בעולם, איכות משתנה, ממוין לפי מספר הורדות'
+            : p.name === 'subdl'
+              ? 'מסד נתונים מודרני עם ריבוי גרסאות ו-release names מדויקים'
+              : 'מקור כתוביות';
+          const disabledAttr = p.enabled ? '' : 'disabled';
+          const disabledReason = p.enabled ? '' : '<div style="color:var(--warning);font-size:0.75rem;margin-top:4px;">⚠️ לא מוגדר מפתח API</div>';
+          list.innerHTML += `
+            <button class="source-btn" ${disabledAttr} onclick="pickSource('${p.name}', '${p.displayName}')">
+              <div class="source-btn-name">${p.displayName}</div>
+              <div class="source-btn-desc">${desc}</div>
+              ${disabledReason}
+            </button>
+          `;
+        });
+      }
+      document.getElementById('sourceModal').classList.add('active');
+    }
+
+    function closeSourceModal() {
+      document.getElementById('sourceModal').classList.remove('active');
+      pendingCtx = null;
+    }
+
+    function pickSource(providerName, providerDisplayName) {
+      if (!pendingCtx) return;
+      pendingCtx.provider = providerName;
+      pendingCtx.providerDisplayName = providerDisplayName;
+      document.getElementById('sourceModal').classList.remove('active');
+      openVariantModal();
+    }
+
+    // ── Variant Picker Modal ──
+    async function openVariantModal() {
+      if (!pendingCtx) return;
+      const { imdbId, type, season, episode, provider, providerDisplayName } = pendingCtx;
+      document.getElementById('variantModalSubtitle').innerHTML = `ממקור: <strong>${providerDisplayName}</strong>`;
+      const listEl = document.getElementById('variantList');
+      listEl.innerHTML = '<div class="loading"><div class="spinner"></div><br>מחפש וריאנטים...</div>';
+      document.getElementById('variantModal').classList.add('active');
+
+      const params = new URLSearchParams({
+        imdbId, provider,
+        type: type || 'movie',
+      });
+      if (season) params.set('season', season);
+      if (episode) params.set('episode', episode);
+
+      try {
+        const res = await fetch(`${BASE}/api/subtitles/candidates?${params.toString()}`);
+        const data = await res.json();
+        if (!res.ok) {
+          listEl.innerHTML = `<div class="empty">❌ ${data.error || 'שגיאה'}</div>`;
+          return;
+        }
+        if (!data.candidates || data.candidates.length === 0) {
+          listEl.innerHTML = `<div class="empty">
+            <div class="empty-icon">🔍</div>
+            <p>לא נמצאו וריאנטים אצל ${providerDisplayName}</p>
+            <p style="font-size:0.8rem;margin-top:8px;">נסה מקור אחר</p>
+          </div>`;
+          return;
+        }
+
+        listEl.innerHTML = data.candidates.map((v, i) => {
+          const meta = [];
+          if (v.downloadCount != null) meta.push(`<span>⬇️ ${Number(v.downloadCount).toLocaleString()} הורדות</span>`);
+          if (v.uploadDate) meta.push(`<span>📅 ${String(v.uploadDate).slice(0, 10)}</span>`);
+          if (v.uploader) meta.push(`<span>👤 ${v.uploader}</span>`);
+          if (v.hearingImpaired) meta.push('<span class="variant-badge-hi">לכבדי שמיעה</span>');
+          const releaseText = v.release || '(ללא שם release)';
+          return `
+            <div class="variant-row" data-idx="${i}" onclick="pickVariant(${i})">
+              <div class="variant-release">${escapeHtml(releaseText)}</div>
+              <div class="variant-meta">${meta.join('') || '<span>ללא מטא-דאטה נוסף</span>'}</div>
+            </div>
+          `;
+        }).join('');
+        // Stash candidates for pickVariant
+        pendingCtx.candidates = data.candidates;
+      } catch (err) {
+        listEl.innerHTML = `<div class="empty">❌ ${err.message}</div>`;
+      }
+    }
+
+    function closeVariantModal() {
+      document.getElementById('variantModal').classList.remove('active');
+      pendingCtx = null;
+    }
+
+    function backToSourcePicker() {
+      document.getElementById('variantModal').classList.remove('active');
+      if (pendingCtx) openSourceModal();
+    }
+
+    async function pickVariant(idx) {
+      if (!pendingCtx) return;
+      const v = pendingCtx.candidates[idx];
+      if (!v) return;
+      document.getElementById('variantModal').classList.remove('active');
+      await submitGeneration(v);
+    }
+
+    // ── Submit the /api/generate POST (step 3) ──
+    async function submitGeneration(variant) {
+      if (!pendingCtx) return;
+      const { imdbId, type, title, poster, year, season, episode, force, provider, uiBtn } = pendingCtx;
+      const progressId = (type === 'tv' || type === 'series') && season && episode
+        ? `${imdbId}:${season}:${episode}`
+        : imdbId;
+      const displayTitle = (type === 'tv' || type === 'series') && season && episode
+        ? `${title} (עונה ${season} פרק ${episode})`
+        : title;
+
+      if (uiBtn) { uiBtn.disabled = true; uiBtn.textContent = 'מתחיל...'; }
+
+      try {
         const genRes = await fetch(`${BASE}/api/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imdbId, type, title, poster, year, season, episode, force })
+          body: JSON.stringify({
+            imdbId, type, title, poster, year, season, episode, force,
+            provider,
+            variantId: variant.id,
+            variantRelease: variant.release,
+          })
         });
         const genData = await genRes.json();
 
         if (genData.status === 'exists') {
-          uiBtn.className = 'btn btn-generate';
-          uiBtn.textContent = '🔄 תרגם מחדש';
-          uiBtn.style.background = 'linear-gradient(135deg, #ca8a04, #a16207)';
-          uiBtn.dataset.force = 'true';
-          uiBtn.disabled = false;
-          showToast('✅ הכתוביות כבר קיימות! לחץ שוב יצירה מחדש.');
+          if (uiBtn) {
+            uiBtn.className = 'btn btn-generate';
+            uiBtn.textContent = '🔄 תרגם מחדש';
+            uiBtn.style.background = 'linear-gradient(135deg, #ca8a04, #a16207)';
+            uiBtn.dataset.force = 'true';
+            uiBtn.disabled = false;
+          }
+          showToast(`✅ כבר יש תרגום מ-${pendingCtx.providerDisplayName}. לחץ שוב ליצירה מחדש.`);
+          pendingCtx = null;
+          loadLibrary();
           return;
         }
 
-        // Step 3: Show progress modal
-        const displayTitle = (type === 'tv' || type === 'series') && season && episode ? `${title} (עונה ${season} פרק ${episode})` : title;
-        showProgressModal(displayTitle);
-        listenToProgress(progressId, uiBtn);
-
+        showProgressModal(displayTitle, pendingCtx.providerDisplayName);
+        listenToProgress(progressId, provider, uiBtn);
       } catch (err) {
         showToast('❌ שגיאה: ' + err.message);
-        uiBtn.disabled = false;
-        uiBtn.textContent = type === 'tv' ? '✨ תרגם פרק זה' : '🎯 צור כתוביות עבריות';
+        if (uiBtn) { uiBtn.disabled = false; uiBtn.textContent = pendingCtx.originalText || '🎯 צור כתוביות עבריות'; }
       }
     }
 
-    function showProgressModal(title) {
+    function showProgressModal(title, providerDisplayName) {
       document.getElementById('modalIcon').textContent = '⏳';
       document.getElementById('modalTitle').textContent = `יוצר כתוביות ל-${title}`;
-      document.getElementById('modalMessage').textContent = 'מתחיל...';
+      document.getElementById('modalMessage').textContent = `מוריד מ-${providerDisplayName}...`;
       document.getElementById('modalProgressBar').style.width = '0%';
       document.getElementById('modalBatch').textContent = '';
       document.getElementById('modalLogs').innerHTML = '';
       document.getElementById('progressModal').classList.add('active');
     }
 
-    function listenToProgress(imdbId, btn) {
-      const source = new EventSource(`${BASE}/api/progress/${imdbId}`);
-      
+    function listenToProgress(contentId, provider, btn) {
+      const source = new EventSource(`${BASE}/api/progress/${contentId}?provider=${encodeURIComponent(provider)}`);
+
       source.onmessage = (event) => {
         const p = JSON.parse(event.data);
         const modal = document.getElementById('progressModal');
 
         document.getElementById('modalMessage').textContent = p.message || '';
 
-        // Render logs
         if (p.logs && p.logs.length > 0) {
-          const logHtml = p.logs.map(logMsg => `<div>${logMsg}</div>`).join('');
           const logsEl = document.getElementById('modalLogs');
-          // Only update if changed
           if (logsEl.childElementCount !== p.logs.length) {
-            logsEl.innerHTML = logHtml;
+            logsEl.innerHTML = p.logs.map(logMsg => `<div>${escapeHtml(logMsg)}</div>`).join('');
             logsEl.scrollTo(0, logsEl.scrollHeight);
           }
         }
@@ -718,27 +991,28 @@
           document.getElementById('modalTitle').textContent = 'הכתוביות מוכנות!';
           document.getElementById('modalMessage').textContent = 'פתח את Stremio וצפה עם כתוביות בעברית';
           document.getElementById('modalBatch').textContent = '';
-          btn.className = 'btn btn-done';
-          btn.textContent = '✅ כתוביות מוכנות';
-          btn.disabled = false;
+          if (btn) {
+            btn.className = 'btn btn-done';
+            btn.textContent = '✅ כתוביות מוכנות';
+            btn.disabled = false;
+          }
           source.close();
+          pendingCtx = null;
           loadLibrary();
-          setTimeout(() => modal.classList.remove('active'), 5000); // 5 sec to let them read logs
+          setTimeout(() => modal.classList.remove('active'), 5000);
         } else if (p.status === 'error') {
           document.getElementById('modalIcon').textContent = '❌';
           document.getElementById('modalTitle').textContent = 'שגיאה';
           document.getElementById('modalMessage').textContent = p.message;
           document.getElementById('modalProgressBar').style.width = '0%';
-          btn.disabled = false;
-          btn.textContent = '🎯 צור כתוביות עבריות';
+          if (btn) { btn.disabled = false; btn.textContent = '🎯 צור כתוביות עבריות'; }
           source.close();
+          pendingCtx = null;
           setTimeout(() => modal.classList.remove('active'), 8000);
         }
       };
 
-      source.onerror = () => {
-        source.close();
-      };
+      source.onerror = () => source.close();
     }
 
     // ── Library ──
@@ -755,16 +1029,27 @@
 
         grid.innerHTML = '';
         for (const movie of data.library) {
+          const providerName = movie.provider || 'opensubtitles';
+          const providerDisplay = movie.providerDisplayName || (providerName === 'subdl' ? 'SubDL' : 'OpenSubtitles');
+          const safeTitle = (movie.title || '').replace(/"/g, '&quot;').replace(/'/g, '\\\'');
           const card = document.createElement('div');
           card.className = 'card';
           card.innerHTML = `
-            ${movie.poster ? `<img class="card-poster" src="${movie.poster}" alt="${movie.title}" loading="lazy">` : ''}
+            ${movie.poster ? `<img class="card-poster" src="${movie.poster}" alt="${safeTitle}" loading="lazy">` : ''}
             <div class="card-info">
-              <div class="card-title" title="${movie.title}">${movie.title}</div>
+              <div class="card-title" title="${safeTitle}">${safeTitle}</div>
               <div class="card-meta">
                 ${movie.year ? `<span>${movie.year}</span>` : ''}
+                <span class="provider-tag ${providerName}">מ-${providerDisplay}</span>
               </div>
+              ${movie.variantRelease ? `<div class="card-meta" style="font-size:0.7rem;direction:ltr;text-align:left;color:var(--text-muted);">${escapeHtml(movie.variantRelease)}</div>` : ''}
               <button class="btn btn-done">✅ כתוביות מוכנות</button>
+              <button class="btn btn-try-other"
+                      data-imdb="${movie.imdbId}"
+                      data-title="${safeTitle}"
+                      data-poster="${movie.poster || ''}"
+                      data-year="${movie.year || ''}"
+                      onclick="tryAnotherSource(this)">🔁 נסה מקור אחר</button>
             </div>
           `;
           grid.appendChild(card);
@@ -772,6 +1057,33 @@
       } catch (err) {
         console.error('Library load error:', err);
       }
+    }
+
+    /**
+     * Re-run the picker flow for an already-cached item so the user can
+     * translate the same title from a different source for comparison.
+     */
+    function tryAnotherSource(btn) {
+      const imdbIdRaw = btn.dataset.imdb;         // e.g. tt1234567 or tt1234567:1:5
+      const parts = imdbIdRaw.split(':');
+      const imdbId = parts[0];
+      const season = parts[1] || null;
+      const episode = parts[2] || null;
+      const isSeries = !!(season && episode);
+
+      pendingCtx = {
+        imdbId,
+        tmdbId: null,
+        type: isSeries ? 'series' : 'movie',
+        title: btn.dataset.title,
+        poster: btn.dataset.poster || null,
+        year: btn.dataset.year || '',
+        season, episode,
+        force: false,
+        uiBtn: null,
+        originalText: null,
+      };
+      openSourceModal();
     }
 
     // ── Utils ──
@@ -785,6 +1097,16 @@
       toast.textContent = msg;
       toast.classList.add('show');
       setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    function escapeHtml(str) {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
   </script>
 </body>

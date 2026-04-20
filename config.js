@@ -27,7 +27,11 @@ module.exports = {
   OPENSUBTITLES_USERNAME: process.env.OPENSUBTITLES_USERNAME || '',
   OPENSUBTITLES_PASSWORD: process.env.OPENSUBTITLES_PASSWORD || '',
   OPENSUBTITLES_API_URL: 'https://api.opensubtitles.com/api/v1',
-  OPENSUBTITLES_USER_AGENT: 'StremioAISubtitles v3.0.0',
+  OPENSUBTITLES_USER_AGENT: 'StremioAISubtitles v3.1.0',
+
+  // ─── SubDL API ─────────────────────────────────────────
+  SUBDL_API_KEY: process.env.SUBDL_API_KEY || '',
+  SUBDL_API_URL: 'https://api.subdl.com/api/v1',
 
   // ─── Server ─────────────────────────────────────────────
   PORT: process.env.PORT || 7000,
@@ -48,7 +52,7 @@ module.exports = {
 
   // ─── Add-on Identity ───────────────────────────────────
   ADDON_ID: 'com.community.ai-subtitles',
-  ADDON_VERSION: '3.0.0',
+  ADDON_VERSION: '3.1.0',
   ADDON_NAME: 'AI Translated Subtitles',
   ADDON_DESCRIPTION: 'כתוביות בעברית מתורגמות ע"י AI. מוריד כתוביות אנגליות מ-OpenSubtitles ומתרגם לעברית עם סנכרון מושלם.',
 };

@@ -10,3 +10,7 @@ services:
         value: AIzaSyDQLmPD2Rlyjk2NI4aEr_q1TUhs-wTPejI
       - key: NODE_ENV
         value: production
+      # Set this in the Render dashboard (Environment tab). The server
+      # still boots without it, but the SubDL source will be disabled.
+      - key: SUBDL_API_KEY
+        sync: false
