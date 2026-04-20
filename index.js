@@ -15,7 +15,7 @@ const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 
 const config = require('./config');
 const { listProviders, getProvider, hasAnyEnabled } = require('./providers');
-const { translateAllTexts } = require('./gemini');
+const { translateAllTexts, CancelError } = require('./gemini');
 const srtParser = require('./srtParser');
 const cache = require('./subtitleCache');
 
@@ -41,6 +41,9 @@ function libraryKey(imdbId, provider) {
 // ─── Progress tracking (per (content, provider)) ────────
 const progressStore = {};
 const activeJobs = new Set();
+// Jobs for which the user requested cancellation. The translation loop
+// polls this set between batches; when the key is present it aborts.
+const cancelRequests = new Set();
 function jobKey(contentId, provider) {
   return `${contentId}::${provider}`;
 }
@@ -265,8 +268,10 @@ app.post('/api/generate', async (req, res) => {
   const contentId = isSeries && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
   const pkey = jobKey(contentId, provider.name);
 
-  // If already generating, don't start again
-  if (progressStore[pkey] && progressStore[pkey].status !== 'error' && progressStore[pkey].status !== 'done') {
+  // If already generating, don't start again. 'cancelled' and 'error' and
+  // 'done' are all terminal states that allow a fresh attempt.
+  const existingStatus = progressStore[pkey]?.status;
+  if (existingStatus && !['error', 'done', 'cancelled'].includes(existingStatus)) {
     return res.json({ status: 'started' });
   }
 
@@ -279,24 +284,26 @@ app.post('/api/generate', async (req, res) => {
 
   // Start generation in background
   activeJobs.add(pkey);
+  cancelRequests.delete(pkey); // clear any stale cancel flag from a previous run
   progressStore[pkey] = { status: 'downloading', message: 'מוריד כתוביות מקוריות...', batch: 0, totalBatches: 0, provider: provider.name, logs: [] };
   res.json({ status: 'started', provider: provider.name });
 
   // Background work
   (async () => {
+    const checkCancelled = () => cancelRequests.has(pkey);
+    const existingLogs = () => progressStore[pkey]?.logs || [];
     try {
       // Step 1: Download English subtitles from the chosen provider + variant
       const englishSrt = await provider.download(variantId);
+      if (checkCancelled()) throw new CancelError();
       if (!englishSrt) {
         progressStore[pkey] = { status: 'error', message: 'לא התקבל תוכן כתוביות מהמקור', provider: provider.name };
-        activeJobs.delete(pkey);
         return;
       }
 
       const validation = srtParser.validate(englishSrt);
       if (!validation.valid) {
         progressStore[pkey] = { status: 'error', message: `קובץ כתוביות לא תקין: ${validation.error || 'unknown'}`, provider: provider.name };
-        activeJobs.delete(pkey);
         return;
       }
 
@@ -305,9 +312,11 @@ app.post('/api/generate', async (req, res) => {
       // Step 2: Parse
       const blocks = srtParser.parse(englishSrt);
       const texts = srtParser.extractTexts(blocks);
+      if (checkCancelled()) throw new CancelError();
 
-      // Step 3: Translate with progress callback
+      // Step 3: Translate with progress callback + cancellation checkpoint
       const onProgress = (update) => {
+        if (!progressStore[pkey]) return;
         progressStore[pkey].status = update.status || progressStore[pkey].status;
         progressStore[pkey].batch = update.batch;
         progressStore[pkey].totalBatches = update.totalBatches;
@@ -317,7 +326,7 @@ app.post('/api/generate', async (req, res) => {
           progressStore[pkey].logs.push(update.log);
         }
       };
-      const translatedTexts = await translateAllTexts(texts, 'heb', onProgress);
+      const translatedTexts = await translateAllTexts(texts, 'heb', onProgress, checkCancelled);
 
       // Step 4: Rebuild SRT
       const translatedBlocks = srtParser.replaceTexts(blocks, translatedTexts);
@@ -348,15 +357,46 @@ app.post('/api/generate', async (req, res) => {
       if (idx >= 0) library[idx] = entry; else library.unshift(entry);
       saveLibrary(library);
 
-      progressStore[pkey] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename, provider: provider.name, logs: progressStore[pkey].logs };
+      progressStore[pkey] = { status: 'done', batch: 0, totalBatches: 0, message: 'הכתוביות מוכנות! 🎉', filename, provider: provider.name, logs: existingLogs() };
       console.log(`[Generate] ✅ ${displayTitle} via ${provider.name} — subtitles ready`);
     } catch (err) {
-      console.error(`[Generate] ❌ ${pkey}:`, err.message);
-      progressStore[pkey] = { status: 'error', message: `שגיאה: ${err.message}`, provider: provider.name, logs: progressStore[pkey]?.logs || [] };
+      if (err && err.cancelled) {
+        console.log(`[Generate] 🛑 Cancelled by user: ${pkey}`);
+        progressStore[pkey] = { status: 'cancelled', message: 'התרגום בוטל על ידי המשתמש', provider: provider.name, logs: existingLogs() };
+      } else {
+        console.error(`[Generate] ❌ ${pkey}:`, err.message);
+        progressStore[pkey] = { status: 'error', message: `שגיאה: ${err.message}`, provider: provider.name, logs: existingLogs() };
+      }
     } finally {
       activeJobs.delete(pkey);
+      cancelRequests.delete(pkey);
     }
   })();
+});
+
+// ─── API: Cancel an in-flight generation ───────────────
+app.post('/api/cancel', (req, res) => {
+  const { imdbId, provider: providerName, season, episode } = req.body || {};
+  if (!imdbId || !providerName) {
+    return res.status(400).json({ error: 'Missing imdbId or provider' });
+  }
+  const isSeries = !!(season && episode);
+  const contentId = isSeries ? `${imdbId}:${season}:${episode}` : imdbId;
+  const pkey = jobKey(contentId, providerName);
+
+  if (!activeJobs.has(pkey)) {
+    // Nothing to cancel — either never started or already finished.
+    return res.json({ ok: false, reason: 'no_active_job' });
+  }
+
+  cancelRequests.add(pkey);
+  console.log(`[Cancel] Requested for ${pkey}`);
+  // Update message immediately so the SSE listener shows "cancelling..."
+  if (progressStore[pkey]) {
+    progressStore[pkey].message = 'מבטל...';
+    progressStore[pkey].cancelling = true;
+  }
+  res.json({ ok: true });
 });
 
 // ─── API: Progress SSE stream ───────────────────────────

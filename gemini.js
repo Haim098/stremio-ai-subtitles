@@ -25,6 +25,33 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Sentinel error used to signal that the user cancelled the translation.
+ * Callers can check `err.cancelled === true` to distinguish from real errors.
+ */
+class CancelError extends Error {
+  constructor(message = 'Translation cancelled by user') {
+    super(message);
+    this.name = 'CancelError';
+    this.cancelled = true;
+  }
+}
+
+/**
+ * Sleep that wakes up early if shouldAbort() becomes true, so cancellation
+ * doesn't have to wait for a full BATCH_DELAY_MS between batches.
+ */
+async function interruptibleSleep(ms, shouldAbort) {
+  const STEP = 250;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (shouldAbort && shouldAbort()) throw new CancelError();
+    const wait = Math.min(STEP, ms - elapsed);
+    await sleep(wait);
+    elapsed += wait;
+  }
+}
+
 function logToUI(msg) {
   console.warn(msg);
   if (currentOnProgress) {
@@ -361,13 +388,21 @@ async function translateBatch(textLines) {
 //  Batch orchestrator
 // ═══════════════════════════════════════════════════════
 
-async function translateAllTexts(allTexts, targetLang, onProgress) {
+/**
+ * @param {string[]} allTexts
+ * @param {string} targetLang
+ * @param {Function} onProgress  — progress callback (same as before)
+ * @param {Function} [shouldAbort] — optional () => boolean; if returns true
+ *        between batches (or during inter-batch sleep) the loop throws a
+ *        CancelError that the caller can catch.
+ */
+async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort) {
   // Reset state for each new translation job
   activeEngine = null;
   activeGithubModelIndex = 0;
   activeGithubModel = null;
   currentOnProgress = onProgress;
-  
+
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
@@ -382,6 +417,10 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
   if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
 
   for (let i = 0; i < totalBatches; i++) {
+    // Cancellation checkpoint BEFORE starting a new batch — this is the
+    // cheap win: no network call, instant stop.
+    if (shouldAbort && shouldAbort()) throw new CancelError();
+
     progressBatchTracker = i + 1;
     const start = i * batchSize;
     const end = Math.min(start + batchSize, allTexts.length);
@@ -395,9 +434,14 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
     allTranslated.push(...translatedBatch);
     console.log(`[AI]   ✅ Batch ${i + 1} done`);
 
-    // Delay between batches
+    // Delay between batches — but watch for cancellation every 250ms
+    // so clicking "Stop" aborts within at most a quarter-second of idle time.
     if (i < totalBatches - 1) {
-      await sleep(batchDelay);
+      if (shouldAbort) {
+        await interruptibleSleep(batchDelay, shouldAbort);
+      } else {
+        await sleep(batchDelay);
+      }
     }
   }
 
@@ -407,4 +451,4 @@ async function translateAllTexts(allTexts, targetLang, onProgress) {
   return allTranslated;
 }
 
-module.exports = { translateBatch, translateAllTexts };
+module.exports = { translateBatch, translateAllTexts, CancelError };

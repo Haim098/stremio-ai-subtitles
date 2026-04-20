@@ -220,6 +220,20 @@
       padding: 7px;
     }
     .btn-try-other:hover { background: rgba(245,158,11,0.2); }
+    .btn-stop {
+      background: rgba(239,68,68,0.15);
+      color: var(--error);
+      border: 1px solid rgba(239,68,68,0.3);
+      margin-top: 10px;
+    }
+    .btn-stop:hover:not(:disabled) {
+      background: rgba(239,68,68,0.25);
+      border-color: var(--error);
+    }
+    .btn-stop:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
 
     .tv-select {
       width: 100%;
@@ -554,6 +568,7 @@
       </div>
       <div class="batch-info" id="modalBatch"></div>
       <div class="modal-logs" id="modalLogs"></div>
+      <button class="btn btn-stop" id="stopBtn" onclick="cancelGeneration()">✖️ עצור תרגום</button>
     </div>
   </div>
 
@@ -569,6 +584,10 @@
     let pendingCtx = null;
     // Providers list cached from /api/providers
     let providers = [];
+    // ── State: the translation job currently visible in the progress modal ──
+    // Shape: { contentId, imdbId, season, episode, provider, providerDisplayName, eventSource, uiBtn }
+    // Used by cancelGeneration() to target the right backend job.
+    let activeGen = null;
 
     // ── Init ──
     document.addEventListener('DOMContentLoaded', async () => {
@@ -954,11 +973,30 @@
       document.getElementById('modalProgressBar').style.width = '0%';
       document.getElementById('modalBatch').textContent = '';
       document.getElementById('modalLogs').innerHTML = '';
+      // Reset stop button to its ready state.
+      const stopBtn = document.getElementById('stopBtn');
+      stopBtn.disabled = false;
+      stopBtn.textContent = '✖️ עצור תרגום';
+      stopBtn.style.display = 'block';
       document.getElementById('progressModal').classList.add('active');
     }
 
     function listenToProgress(contentId, provider, btn) {
+      // contentId looks like "tt1234567" or "tt1234567:1:5" — split out the
+      // optional season/episode so we can POST them to /api/cancel.
+      const cidParts = String(contentId).split(':');
+      activeGen = {
+        contentId,
+        imdbId: cidParts[0],
+        season: cidParts[1] || null,
+        episode: cidParts[2] || null,
+        provider,
+        providerDisplayName: pendingCtx?.providerDisplayName || provider,
+        uiBtn: btn,
+      };
+
       const source = new EventSource(`${BASE}/api/progress/${contentId}?provider=${encodeURIComponent(provider)}`);
+      activeGen.eventSource = source;
 
       source.onmessage = (event) => {
         const p = JSON.parse(event.data);
@@ -972,6 +1010,14 @@
             logsEl.innerHTML = p.logs.map(logMsg => `<div>${escapeHtml(logMsg)}</div>`).join('');
             logsEl.scrollTo(0, logsEl.scrollHeight);
           }
+        }
+
+        // If the server is acknowledging the cancel request, disable the
+        // stop button so the user doesn't keep clicking it.
+        if (p.cancelling) {
+          const stopBtn = document.getElementById('stopBtn');
+          stopBtn.disabled = true;
+          stopBtn.textContent = 'מבטל...';
         }
 
         if (p.status === 'downloading') {
@@ -991,28 +1037,89 @@
           document.getElementById('modalTitle').textContent = 'הכתוביות מוכנות!';
           document.getElementById('modalMessage').textContent = 'פתח את Stremio וצפה עם כתוביות בעברית';
           document.getElementById('modalBatch').textContent = '';
+          document.getElementById('stopBtn').style.display = 'none';
           if (btn) {
             btn.className = 'btn btn-done';
             btn.textContent = '✅ כתוביות מוכנות';
             btn.disabled = false;
           }
           source.close();
+          activeGen = null;
           pendingCtx = null;
           loadLibrary();
           setTimeout(() => modal.classList.remove('active'), 5000);
+        } else if (p.status === 'cancelled') {
+          document.getElementById('modalIcon').textContent = '🛑';
+          document.getElementById('modalTitle').textContent = 'התרגום בוטל';
+          document.getElementById('modalMessage').textContent = p.message || 'התרגום נעצר לבקשתך';
+          document.getElementById('modalProgressBar').style.width = '0%';
+          document.getElementById('stopBtn').style.display = 'none';
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🎯 צור כתוביות עבריות';
+          }
+          source.close();
+          activeGen = null;
+          pendingCtx = null;
+          showToast('🛑 התרגום בוטל');
+          setTimeout(() => modal.classList.remove('active'), 2500);
         } else if (p.status === 'error') {
           document.getElementById('modalIcon').textContent = '❌';
           document.getElementById('modalTitle').textContent = 'שגיאה';
           document.getElementById('modalMessage').textContent = p.message;
           document.getElementById('modalProgressBar').style.width = '0%';
+          document.getElementById('stopBtn').style.display = 'none';
           if (btn) { btn.disabled = false; btn.textContent = '🎯 צור כתוביות עבריות'; }
           source.close();
+          activeGen = null;
           pendingCtx = null;
           setTimeout(() => modal.classList.remove('active'), 8000);
         }
       };
 
       source.onerror = () => source.close();
+    }
+
+    /**
+     * Ask the backend to abort the currently-running translation.
+     * The backend sets a cancel flag; the worker loop picks it up
+     * between batches (usually within a few seconds) and emits
+     * status='cancelled' via SSE, which closes this modal.
+     */
+    async function cancelGeneration() {
+      if (!activeGen) return;
+      if (!confirm('לעצור את התרגום? התוצאה לא תישמר ותצטרך להתחיל מחדש.')) return;
+      const stopBtn = document.getElementById('stopBtn');
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'שולח בקשת ביטול...';
+
+      try {
+        const body = {
+          imdbId: activeGen.imdbId,
+          provider: activeGen.provider,
+        };
+        if (activeGen.season) body.season = activeGen.season;
+        if (activeGen.episode) body.episode = activeGen.episode;
+
+        const res = await fetch(`${BASE}/api/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          showToast('⚠️ אין תהליך פעיל לביטול');
+          stopBtn.disabled = false;
+          stopBtn.textContent = '✖️ עצור תרגום';
+          return;
+        }
+        // Backend acknowledged; wait for SSE 'cancelled' event to close modal.
+        stopBtn.textContent = 'מבטל...';
+      } catch (err) {
+        showToast('❌ שגיאה בביטול: ' + err.message);
+        stopBtn.disabled = false;
+        stopBtn.textContent = '✖️ עצור תרגום';
+      }
     }
 
     // ── Library ──
