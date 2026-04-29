@@ -12,6 +12,7 @@
 
 const fetch = require('node-fetch');
 const config = require('./config');
+const srtParser = require('./srtParser');
 
 // ─── State ──────────────────────────────────────────────
 let activeEngine = null;
@@ -442,16 +443,22 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
   activeGithubToken = options.userGithubToken || null;
   activeGithubTokenSource = activeGithubToken ? 'user' : 'server';
 
+  // ── Flatten multi-line blocks so each physical line gets its own numbered
+  //    prompt entry. Without this, dialog blocks like "- A\n- B" become a
+  //    single ambiguous numbered entry and continuation lines get dropped
+  //    by the response parser.
+  const { flat: flatTexts, boundaries } = srtParser.flattenForTranslation(allTexts);
+
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
-  const totalBatches = Math.ceil(allTexts.length / batchSize);
+  const totalBatches = Math.ceil(flatTexts.length / batchSize);
   const allTranslated = [];
 
   console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + activeGithubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
   console.log(`[AI] Token source: ${activeGithubTokenSource}`);
   console.log(`[AI] Model queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')} → Gemini`);
-  console.log(`[AI] Translating ${allTexts.length} lines in ${totalBatches} batches to ${targetLang}...`);
+  console.log(`[AI] Translating ${allTexts.length} blocks (${flatTexts.length} flat lines) in ${totalBatches} batches to ${targetLang}...`);
 
   if (onProgress) onProgress({ log: `🚀 Starting with: ${activeGithubModel || config.GEMINI_MODEL} | Queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')}` });
   if (activeGithubTokenSource === 'user' && onProgress) {
@@ -466,8 +473,8 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
 
     progressBatchTracker = i + 1;
     const start = i * batchSize;
-    const end = Math.min(start + batchSize, allTexts.length);
-    const batch = allTexts.slice(start, end);
+    const end = Math.min(start + batchSize, flatTexts.length);
+    const batch = flatTexts.slice(start, end);
 
     const currentModel = activeEngine === 'gemini' ? 'Gemini' : (activeGithubModel || '?');
     console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end}) via ${currentModel}...`);
@@ -488,10 +495,17 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
     }
   }
 
-  const translatedCount = allTranslated.filter((t, i) => t !== allTexts[i]).length;
-  console.log(`[AI] ✅ Done: ${translatedCount}/${allTexts.length} lines translated`);
+  // ── Unflatten: rejoin per-block lines, with per-line fallback to original
+  //    so a partial failure still shows the half that translated rather than
+  //    reverting the whole block to English.
+  const unflattenedTranslations = srtParser.unflattenAfterTranslation(
+    allTranslated, flatTexts, boundaries
+  );
 
-  return allTranslated;
+  const translatedCount = unflattenedTranslations.filter((t, i) => t !== allTexts[i]).length;
+  console.log(`[AI] ✅ Done: ${translatedCount}/${allTexts.length} blocks translated`);
+
+  return unflattenedTranslations;
 }
 
 module.exports = { translateBatch, translateAllTexts, CancelError };

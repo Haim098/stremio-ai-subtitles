@@ -74,4 +74,17 @@ console.log('\n=== unflattenAfterTranslation ===');
   eq(result, ['שלום', '- היי\n- Bye', 'סוף'], 'per-line fallback');
 }
 
+console.log('\n=== translateAllTexts shape integration ===');
+{
+  // Cheap shape check — we don't hit the network. Verify the function
+  // is exported with the expected signature so a bad refactor would surface
+  // here. Actual translation correctness is covered by test-integration.js.
+  const gemini = require('./gemini');
+  assert.strictEqual(typeof gemini.translateAllTexts, 'function');
+  console.log('  ✅ translateAllTexts is exported');
+  // Returns a Promise (async function)
+  assert.strictEqual(gemini.translateAllTexts.constructor.name, 'AsyncFunction');
+  console.log('  ✅ translateAllTexts is async');
+}
+
 console.log('\n🎉 All multi-line tests passed.');
