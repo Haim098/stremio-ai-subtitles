@@ -113,9 +113,12 @@ function parseResponse(responseText, expectedCount) {
   }
 
   // Fallback: unnumbered lines
-  const filled = translations.filter(t => t.length > 0).length;
+  let filled = translations.filter(t => t.length > 0).length;
   if (filled < expectedCount * 0.7) {
     console.warn(`[AI] Only parsed ${filled}/${expectedCount}. Trying fallback...`);
+    if (currentOnProgress) {
+      currentOnProgress({ log: `⚠️ Parser only got ${filled}/${expectedCount} lines from model — trying loose fallback` });
+    }
     const cleanLines = responseText.trim().split('\n').filter(l => l.trim().length > 0);
     if (cleanLines.length >= expectedCount) {
       for (let i = 0; i < expectedCount; i++) {
@@ -123,6 +126,18 @@ function parseResponse(responseText, expectedCount) {
           translations[i] = cleanLines[i].replace(/^\d+\s*[|.):\-]\s*/, '').trim();
         }
       }
+    }
+  }
+
+  // After all parsing attempts, log the final fill rate when it's still low.
+  // The caller will fall back to original English for empty entries — this
+  // tells us a model produced a malformed response so we can switch models.
+  filled = translations.filter(t => t.length > 0).length;
+  if (filled < expectedCount) {
+    const dropped = expectedCount - filled;
+    console.warn(`[AI] ⚠️ ${dropped}/${expectedCount} lines could not be parsed; will fall back to original English for those.`);
+    if (currentOnProgress) {
+      currentOnProgress({ log: `⚠️ ${dropped}/${expectedCount} lines unparseable — keeping originals` });
     }
   }
 
@@ -157,6 +172,10 @@ async function translateBatchGitHub(textLines) {
       body.max_completion_tokens = 16384;
     } else {
       body.temperature = 0.3;
+      // Without an explicit cap, GitHub Models can default to ~4096 output
+      // tokens — too low for a 100-line Hebrew batch, which silently truncates
+      // the tail of the response. 16384 matches the gpt-5 / Gemini ceilings.
+      body.max_tokens = 16384;
     }
 
     const response = await fetch(url, {
