@@ -102,6 +102,60 @@ function replaceTexts(blocks, translatedTexts) {
 }
 
 /**
+ * Flatten multi-line subtitle blocks into single-line items so each line gets
+ * its own numbered entry when translated. Returns:
+ *   - flat: every physical line as its own string
+ *   - boundaries: per-block array of indices into `flat` so the original
+ *     block structure can be reconstructed by unflattenAfterTranslation
+ *
+ * Example:
+ *   input:  ['A', '- B1\n- B2', 'C']
+ *   output: { flat: ['A', '- B1', '- B2', 'C'], boundaries: [[0], [1,2], [3]] }
+ *
+ * Why: the AI translator sends one numbered prompt entry per element. If an
+ * element itself contains '\n', the prompt becomes ambiguous and the response
+ * parser silently drops continuation lines. Flattening removes the ambiguity.
+ *
+ * @param {string[]} textBlocks
+ * @returns {{ flat: string[], boundaries: number[][] }}
+ */
+function flattenForTranslation(textBlocks) {
+  const flat = [];
+  const boundaries = [];
+  for (const block of textBlocks) {
+    const lines = block.split('\n');
+    const indices = [];
+    for (const line of lines) {
+      indices.push(flat.length);
+      flat.push(line);
+    }
+    boundaries.push(indices);
+  }
+  return { flat, boundaries };
+}
+
+/**
+ * Inverse of flattenForTranslation. Joins translated flat items back into the
+ * original block shape. If a translated line is empty (translation dropped or
+ * failed), falls back per-line to the original English line — so a half-failed
+ * dialog still shows the half that did translate, instead of going all-English.
+ *
+ * @param {string[]} translatedFlat - translations parallel to originalFlat
+ * @param {string[]} originalFlat   - the `flat` from flattenForTranslation
+ * @param {number[][]} boundaries   - the `boundaries` from flattenForTranslation
+ * @returns {string[]} per-block joined text
+ */
+function unflattenAfterTranslation(translatedFlat, originalFlat, boundaries) {
+  return boundaries.map(indices => {
+    const lines = indices.map(i => {
+      const t = translatedFlat[i];
+      return (t && t.length > 0) ? t : originalFlat[i];
+    });
+    return lines.join('\n');
+  });
+}
+
+/**
  * Validate basic SRT structure
  * @param {string} srtContent
  * @returns {{ valid: boolean, blockCount: number, error?: string }}
@@ -118,4 +172,7 @@ function validate(srtContent) {
   }
 }
 
-module.exports = { parse, build, extractTexts, replaceTexts, validate };
+module.exports = {
+  parse, build, extractTexts, replaceTexts, validate,
+  flattenForTranslation, unflattenAfterTranslation,
+};
