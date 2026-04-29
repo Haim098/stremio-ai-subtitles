@@ -37,7 +37,10 @@ module.exports = {
   PORT: process.env.PORT || 7000,
 
   // ─── Translation Settings ──────────────────────────────
-  TRANSLATION_BATCH_SIZE: 200,
+  // Smaller batches → smaller blast radius if one batch fails completely
+  // (one bad batch = ~100 untranslated lines instead of ~200), and lower
+  // risk of hitting per-response token caps on Hebrew output.
+  TRANSLATION_BATCH_SIZE: 100,
   BATCH_DELAY_MS: 3000,
   MAX_RETRIES: 5,
 
