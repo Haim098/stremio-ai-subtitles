@@ -19,6 +19,11 @@ let activeGithubModelIndex = 0;
 let activeGithubModel = null;
 let currentOnProgress = null;
 let progressBatchTracker = 0;
+// When the caller (user-provided PAT flow) passes a token via translateAllTexts,
+// we stash it here so the per-batch HTTP call can use it instead of the
+// server's default config.GITHUB_TOKEN. Reset at the start of every run.
+let activeGithubToken = null;
+let activeGithubTokenSource = 'server'; // 'server' | 'user'
 
 // ─── Helpers ────────────────────────────────────────────
 function sleep(ms) {
@@ -130,6 +135,9 @@ function parseResponse(responseText, expectedCount) {
 async function translateBatchGitHub(textLines) {
   const model = activeGithubModel || config.GITHUB_MODELS_QUEUE[0];
   const url = `${config.GITHUB_MODELS_URL}/chat/completions`;
+  // Prefer the user-supplied PAT (when present) so GitHub bills the user's
+  // Models quota rather than the server's; fall back to server default.
+  const bearer = activeGithubToken || config.GITHUB_TOKEN;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
@@ -154,7 +162,7 @@ async function translateBatchGitHub(textLines) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.GITHUB_TOKEN}`,
+        'Authorization': `Bearer ${bearer}`,
         'User-Agent': 'Stremio-AI-Subtitles/4.0',
       },
       body: JSON.stringify(body),
@@ -165,23 +173,34 @@ async function translateBatchGitHub(textLines) {
     if (!response.ok) {
       const errText = await response.text();
       const status = response.status;
-      
+
+      // 401/403 with a user-supplied token is almost certainly a bad or
+      // expired PAT — surface it distinctly so the UI can tell the user
+      // to re-authenticate, instead of silently falling back to Gemini.
+      if ((status === 401 || status === 403) && activeGithubTokenSource === 'user') {
+        throw {
+          status,
+          userTokenInvalid: true,
+          message: `הטוקן האישי של GitHub לא תקין או פג תוקף (${status}). חבר מחדש דרך ההגדרות.`,
+        };
+      }
+
       if (status === 429) {
         const retryAfter = response.headers.get('retry-after');
         const delay = retryAfter ? parseInt(retryAfter) * 1000 : 15000;
         throw { status: 429, retryDelay: delay, message: `Rate limited (429)` };
       }
-      
+
       // Content filter
       if (status === 400 && errText.includes('content_filter')) {
         throw { status: 400, contentFilter: true, message: `Content filter (400)` };
       }
 
       // Any other error: model-level failure — trigger instant skip
-      throw { 
-        status, 
-        modelFailure: true, 
-        message: `GitHub API error ${status}: ${errText.slice(0, 200)}` 
+      throw {
+        status,
+        modelFailure: true,
+        message: `GitHub API error ${status}: ${errText.slice(0, 200)}`
       };
     }
 
@@ -237,11 +256,14 @@ async function translateBatchGemini(textLines) {
 // ═══════════════════════════════════════════════════════
 
 function getEngine() {
-  if (!activeGithubModel && config.GITHUB_TOKEN) {
+  // A user-supplied PAT unlocks the GitHub engine even if the server doesn't
+  // have GITHUB_TOKEN configured — this is the whole point of BYOK.
+  const hasGithubAuth = !!(activeGithubToken || config.GITHUB_TOKEN);
+  if (!activeGithubModel && hasGithubAuth) {
     activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
   }
   if (activeEngine) return activeEngine;
-  if (config.GITHUB_TOKEN) return activeEngine = 'github';
+  if (hasGithubAuth) return activeEngine = 'github';
   if (config.GEMINI_API_KEY) return activeEngine = 'gemini';
   throw new Error('No AI API configured! Set GITHUB_TOKEN or GEMINI_API_KEY');
 }
@@ -300,7 +322,18 @@ async function translateBatch(textLines) {
         return await translateBatchGemini(textLines);
       }
     } catch (error) {
-      
+
+      // ── User-supplied PAT is invalid/expired ──
+      // Stop the whole job immediately: the user asked us to use their token,
+      // so silently failing over to Gemini or the server token would defeat
+      // the whole point. Surface a clear Hebrew message instead.
+      if (error.userTokenInvalid) {
+        logToUI(`[AI] 🔑 ${error.message}`);
+        const authErr = new Error(error.message);
+        authErr.userTokenInvalid = true;
+        throw authErr;
+      }
+
       // ── Model-level failure (400/401/403/404/500/empty) ──
       // Instantly skip to the next model — no retries on the same broken model
       if (error.modelFailure) {
@@ -395,13 +428,19 @@ async function translateBatch(textLines) {
  * @param {Function} [shouldAbort] — optional () => boolean; if returns true
  *        between batches (or during inter-batch sleep) the loop throws a
  *        CancelError that the caller can catch.
+ * @param {Object} [options]
+ * @param {string} [options.userGithubToken] — when the viewer pasted their own
+ *        GitHub Models PAT in the UI, pass it here so GitHub bills their
+ *        personal quota instead of the server's. Omit to use config.GITHUB_TOKEN.
  */
-async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort) {
+async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, options = {}) {
   // Reset state for each new translation job
   activeEngine = null;
   activeGithubModelIndex = 0;
   activeGithubModel = null;
   currentOnProgress = onProgress;
+  activeGithubToken = options.userGithubToken || null;
+  activeGithubTokenSource = activeGithubToken ? 'user' : 'server';
 
   const engine = getEngine();
   const batchSize = config.TRANSLATION_BATCH_SIZE;
@@ -410,10 +449,14 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort) 
   const allTranslated = [];
 
   console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + activeGithubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
+  console.log(`[AI] Token source: ${activeGithubTokenSource}`);
   console.log(`[AI] Model queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')} → Gemini`);
   console.log(`[AI] Translating ${allTexts.length} lines in ${totalBatches} batches to ${targetLang}...`);
 
   if (onProgress) onProgress({ log: `🚀 Starting with: ${activeGithubModel || config.GEMINI_MODEL} | Queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')}` });
+  if (activeGithubTokenSource === 'user' && onProgress) {
+    onProgress({ log: `🔑 Using your personal GitHub Models token (quota will be billed to your account)` });
+  }
   if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
 
   for (let i = 0; i < totalBatches; i++) {

@@ -250,6 +250,14 @@ app.get('/api/status/:imdbId', (req, res) => {
 app.post('/api/generate', async (req, res) => {
   const { imdbId, type, title, poster, year, season, episode, force, provider: providerName, variantId, variantRelease } = req.body;
 
+  // Viewer's personal GitHub Models PAT (optional BYOK).
+  // Sent via header (not body) so it never gets logged with request payload
+  // snapshots. Trim & sanity-check the prefix to avoid random strings hitting
+  // GitHub as Authorization values.
+  const rawUserToken = (req.get('x-user-github-token') || '').trim();
+  const looksLikeGithubPat = /^(github_pat_|ghp_|ghu_|gho_|ghs_|ghr_)[A-Za-z0-9_]+$/.test(rawUserToken);
+  const userGithubToken = looksLikeGithubPat ? rawUserToken : null;
+
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
   if (!providerName) return res.status(400).json({ error: 'Missing provider' });
   if (!variantId) return res.status(400).json({ error: 'Missing variantId' });
@@ -326,7 +334,13 @@ app.post('/api/generate', async (req, res) => {
           progressStore[pkey].logs.push(update.log);
         }
       };
-      const translatedTexts = await translateAllTexts(texts, 'heb', onProgress, checkCancelled);
+      const translatedTexts = await translateAllTexts(
+        texts,
+        'heb',
+        onProgress,
+        checkCancelled,
+        { userGithubToken }
+      );
 
       // Step 4: Rebuild SRT
       const translatedBlocks = srtParser.replaceTexts(blocks, translatedTexts);
@@ -363,6 +377,9 @@ app.post('/api/generate', async (req, res) => {
       if (err && err.cancelled) {
         console.log(`[Generate] 🛑 Cancelled by user: ${pkey}`);
         progressStore[pkey] = { status: 'cancelled', message: 'התרגום בוטל על ידי המשתמש', provider: provider.name, logs: existingLogs() };
+      } else if (err && err.userTokenInvalid) {
+        console.warn(`[Generate] 🔑 Invalid user PAT: ${pkey}`);
+        progressStore[pkey] = { status: 'error', tokenInvalid: true, message: err.message, provider: provider.name, logs: existingLogs() };
       } else {
         console.error(`[Generate] ❌ ${pkey}:`, err.message);
         progressStore[pkey] = { status: 'error', message: `שגיאה: ${err.message}`, provider: provider.name, logs: existingLogs() };
@@ -372,6 +389,46 @@ app.post('/api/generate', async (req, res) => {
       cancelRequests.delete(pkey);
     }
   })();
+});
+
+// ─── API: Validate a user-supplied GitHub Models PAT ──────
+// The UI calls this from the Settings modal before saving the token so we
+// give immediate feedback ("works / wrong scope / invalid"). We never store
+// the token server-side — it's checked, the verdict is returned, and the
+// browser keeps it in localStorage.
+app.post('/api/validate-github-token', async (req, res) => {
+  const token = ((req.body && req.body.token) || '').trim();
+  if (!token) return res.status(400).json({ ok: false, reason: 'missing_token' });
+  const looksLikePat = /^(github_pat_|ghp_|ghu_|gho_|ghs_|ghr_)[A-Za-z0-9_]+$/.test(token);
+  if (!looksLikePat) return res.json({ ok: false, reason: 'bad_format' });
+
+  try {
+    // Smallest possible inference call just to confirm the token works with
+    // the Models API and has the right scope. Any 2xx = pass; 401/403 = fail.
+    const r = await fetch(`${config.GITHUB_MODELS_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'User-Agent': 'Stremio-AI-Subtitles/4.0',
+      },
+      body: JSON.stringify({
+        model: 'openai/gpt-4o-mini',
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+      }),
+    });
+    if (r.ok) return res.json({ ok: true });
+    if (r.status === 401 || r.status === 403) {
+      return res.json({ ok: false, reason: 'unauthorized', status: r.status });
+    }
+    // Rate-limited by probe counts as "token works, just throttled"
+    if (r.status === 429) return res.json({ ok: true, warning: 'rate_limited_but_valid' });
+    const body = await r.text();
+    return res.json({ ok: false, reason: 'upstream_error', status: r.status, detail: body.slice(0, 200) });
+  } catch (err) {
+    return res.json({ ok: false, reason: 'network_error', detail: err.message });
+  }
 });
 
 // ─── API: Cancel an in-flight generation ───────────────

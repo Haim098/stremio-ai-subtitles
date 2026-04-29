@@ -359,8 +359,23 @@
       max-width: 560px;
       width: 92%;
       max-height: 85vh;
-      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       text-align: center;
+    }
+    /* Scrollable content area inside a modal — keeps the footer (e.g. Stop
+       button) pinned and always visible even when logs fill the modal. */
+    .modal-body {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .modal-sticky-footer {
+      flex-shrink: 0;
+      padding-top: 12px;
+      margin-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.06);
     }
     .modal h3 { font-size: 1.3rem; margin-bottom: 8px; }
     .modal .progress-text { color: var(--text-secondary); margin: 20px 0; font-size: 1rem; }
@@ -489,13 +504,138 @@
     }
     .modal-footer .btn { flex: 1; }
 
+    /* ── Settings (BYOK / GitHub PAT) ── */
+    .settings-fab {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      font-size: 1.2rem;
+      cursor: pointer;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+    .settings-fab:hover {
+      border-color: var(--accent);
+      transform: rotate(30deg);
+      box-shadow: 0 0 14px var(--accent-glow);
+    }
+    .settings-fab .badge-dot {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--success);
+      border: 2px solid var(--bg-secondary);
+      display: none;
+    }
+    .settings-fab.token-active .badge-dot { display: block; }
+
+    .onboarding-card {
+      background: rgba(139,92,246,0.06);
+      border: 1px solid rgba(139,92,246,0.2);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      text-align: right;
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+    .onboarding-card h4 {
+      color: var(--accent);
+      margin-bottom: 8px;
+      font-size: 1rem;
+    }
+    .onboarding-card ol {
+      padding-right: 20px;
+      margin: 10px 0;
+      color: var(--text-secondary);
+    }
+    .onboarding-card ol li { margin-bottom: 6px; }
+    .onboarding-card code {
+      background: rgba(0,0,0,0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+      color: var(--accent);
+      direction: ltr;
+      display: inline-block;
+    }
+    .onboarding-card a {
+      color: var(--accent);
+      font-weight: 600;
+      text-decoration: none;
+      border-bottom: 1px dashed var(--accent);
+    }
+    .onboarding-card a:hover { color: #a78bfa; border-bottom-style: solid; }
+
+    .pat-input {
+      width: 100%;
+      padding: 12px 14px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      outline: none;
+      direction: ltr;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+    .pat-input:focus { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+    .pat-status {
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin-bottom: 12px;
+      text-align: right;
+      display: none;
+    }
+    .pat-status.success { background: rgba(34,197,94,0.12); color: var(--success); border: 1px solid rgba(34,197,94,0.3); display: block; }
+    .pat-status.error   { background: rgba(239,68,68,0.12); color: var(--error);   border: 1px solid rgba(239,68,68,0.3);   display: block; }
+    .pat-status.info    { background: rgba(59,130,246,0.12); color: #3b82f6;        border: 1px solid rgba(59,130,246,0.3);  display: block; }
+
+    .btn-test { background: rgba(59,130,246,0.15); color: #3b82f6; border: 1px solid rgba(59,130,246,0.3); }
+    .btn-test:hover:not(:disabled) { background: rgba(59,130,246,0.25); border-color: #3b82f6; }
+    .btn-danger { background: rgba(239,68,68,0.12); color: var(--error); border: 1px solid rgba(239,68,68,0.25); }
+    .btn-danger:hover:not(:disabled) { background: rgba(239,68,68,0.22); border-color: var(--error); }
+
+    .active-token-banner {
+      background: rgba(34,197,94,0.08);
+      border: 1px solid rgba(34,197,94,0.3);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      color: var(--success);
+      font-size: 0.88rem;
+      text-align: right;
+    }
+
     @media (max-width: 600px) {
       .header h1 { font-size: 2rem; }
       .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+      .settings-fab { top: 12px; left: 12px; width: 40px; height: 40px; }
     }
   </style>
 </head>
 <body>
+
+  <!-- Floating Settings button (BYOK PAT) -->
+  <button class="settings-fab" id="settingsFab" onclick="openSettingsModal()" title="הגדרות / חיבור GitHub">
+    ⚙️
+    <span class="badge-dot" title="טוקן אישי פעיל"></span>
+  </button>
 
   <div class="container">
     <div class="header">
@@ -531,10 +671,12 @@
   <!-- Source Picker Modal -->
   <div class="modal-overlay" id="sourceModal">
     <div class="modal">
-      <h3>🎯 בחר מקור כתוביות</h3>
-      <p class="progress-text" id="sourceModalSubtitle">מאיזה אתר להוריד את כתוביות המקור (באנגלית)?</p>
-      <div class="source-list" id="sourceList">
-        <div class="loading"><div class="spinner"></div><br>טוען מקורות...</div>
+      <div class="modal-body">
+        <h3>🎯 בחר מקור כתוביות</h3>
+        <p class="progress-text" id="sourceModalSubtitle">מאיזה אתר להוריד את כתוביות המקור (באנגלית)?</p>
+        <div class="source-list" id="sourceList">
+          <div class="loading"><div class="spinner"></div><br>טוען מקורות...</div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeSourceModal()">ביטול</button>
@@ -545,10 +687,12 @@
   <!-- Variant Picker Modal -->
   <div class="modal-overlay" id="variantModal">
     <div class="modal">
-      <h3>📋 בחר וריאנט</h3>
-      <p class="progress-text" id="variantModalSubtitle">ממקור: <strong>...</strong></p>
-      <div class="variant-list" id="variantList">
-        <div class="loading"><div class="spinner"></div><br>מחפש וריאנטים...</div>
+      <div class="modal-body">
+        <h3>📋 בחר וריאנט</h3>
+        <p class="progress-text" id="variantModalSubtitle">ממקור: <strong>...</strong></p>
+        <div class="variant-list" id="variantList">
+          <div class="loading"><div class="spinner"></div><br>מחפש וריאנטים...</div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="backToSourcePicker()">← חזור למקורות</button>
@@ -557,18 +701,80 @@
     </div>
   </div>
 
+  <!-- Settings Modal (GitHub Models BYOK) -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-body">
+        <h3>⚙️ חיבור חשבון GitHub (אופציונלי)</h3>
+        <p class="progress-text" style="margin: 12px 0;">
+          חבר את חשבון ה-GitHub שלך כדי שהתרגומים יצרכו מהמכסה האישית שלך
+          ב-<strong>GitHub Models</strong> במקום מהמפתח של השרת.
+        </p>
+
+        <div id="activeTokenBanner" class="active-token-banner" style="display:none;">
+          ✅ טוקן אישי פעיל — התרגום הבא יחייב את חשבון ה-GitHub שלך.
+        </div>
+
+        <div class="onboarding-card">
+          <h4>📋 איך מקבלים טוקן (פעם אחת, 30 שניות):</h4>
+          <ol>
+            <li>
+              לחץ על הקישור הזה לפתיחת דף יצירת טוקן ב-GitHub:<br>
+              <a href="https://github.com/settings/personal-access-tokens/new"
+                 target="_blank" rel="noopener">
+                🔗 פתח את דף יצירת ה-Token ב-GitHub
+              </a>
+            </li>
+            <li>בשדה <code>Token name</code> כתוב למשל: <code>Stremio AI Subtitles</code></li>
+            <li>בחר <code>Expiration</code> לפי ההעדפה שלך (למשל: 90 ימים או No expiration)</li>
+            <li>גלול ל-<code>Permissions</code> → <code>Account permissions</code></li>
+            <li>
+              מצא <code>Models</code> → שנה ל-<code>Read-only</code>
+              <span style="color: var(--text-muted);">(זה כל מה שצריך)</span>
+            </li>
+            <li>בתחתית הדף לחץ <code>Generate token</code></li>
+            <li>העתק את הטוקן שמתחיל ב-<code>github_pat_...</code> והדבק אותו כאן למטה 👇</li>
+          </ol>
+          <div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 8px;">
+            💡 הטוקן נשמר רק בדפדפן שלך (localStorage) — השרת לא שומר אותו. תקף לכל הביקורים הבאים.
+          </div>
+        </div>
+
+        <label style="display:block; text-align:right; margin-bottom:6px; font-size:0.9rem; color:var(--text-secondary);">
+          🔑 הדבק כאן את ה-GitHub PAT:
+        </label>
+        <input type="password" class="pat-input" id="patInput"
+               placeholder="github_pat_11ABCDEFGHIJK..." autocomplete="off" spellcheck="false">
+
+        <div class="pat-status" id="patStatus"></div>
+      </div>
+
+      <div class="modal-sticky-footer">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-test"      onclick="testAndSavePat()"  style="flex:1; min-width:140px;">🧪 בדוק ושמור</button>
+          <button class="btn btn-danger"    onclick="clearPat()"        id="clearPatBtn"  style="flex:1; min-width:100px; display:none;">🗑️ נתק</button>
+          <button class="btn btn-secondary" onclick="closeSettingsModal()" style="flex:1; min-width:100px;">סגור</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Progress Modal -->
   <div class="modal-overlay" id="progressModal">
     <div class="modal">
-      <div id="modalIcon">⏳</div>
-      <h3 id="modalTitle">יוצר כתוביות...</h3>
-      <p class="progress-text" id="modalMessage">מתחיל...</p>
-      <div class="big-progress">
-        <div class="big-progress-fill" id="modalProgressBar" style="width: 0%"></div>
+      <div class="modal-body">
+        <div id="modalIcon">⏳</div>
+        <h3 id="modalTitle">יוצר כתוביות...</h3>
+        <p class="progress-text" id="modalMessage">מתחיל...</p>
+        <div class="big-progress">
+          <div class="big-progress-fill" id="modalProgressBar" style="width: 0%"></div>
+        </div>
+        <div class="batch-info" id="modalBatch"></div>
+        <div class="modal-logs" id="modalLogs"></div>
       </div>
-      <div class="batch-info" id="modalBatch"></div>
-      <div class="modal-logs" id="modalLogs"></div>
-      <button class="btn btn-stop" id="stopBtn" onclick="cancelGeneration()">✖️ עצור תרגום</button>
+      <div class="modal-sticky-footer">
+        <button class="btn btn-stop" id="stopBtn" onclick="cancelGeneration()">✖️ עצור תרגום</button>
+      </div>
     </div>
   </div>
 
@@ -589,9 +795,121 @@
     // Used by cancelGeneration() to target the right backend job.
     let activeGen = null;
 
+    // ═══════════════════════════════════════════════════════
+    //  GitHub Models BYOK — personal PAT stored in localStorage
+    // ═══════════════════════════════════════════════════════
+    // The token is kept *only* in the user's browser. When the user kicks off
+    // a translation we attach it as an `x-user-github-token` header and the
+    // server uses it for the GitHub Models call; GitHub bills *their* quota,
+    // not the server's. Cleared by clearPat() or by the user clearing their
+    // browser data.
+    const PAT_STORAGE_KEY = 'ai_subs_github_pat';
+    const PAT_PREFIX_RE = /^(github_pat_|ghp_|ghu_|gho_|ghs_|ghr_)[A-Za-z0-9_]+$/;
+
+    function getUserPat() {
+      try { return localStorage.getItem(PAT_STORAGE_KEY) || ''; } catch { return ''; }
+    }
+    function saveUserPat(token) {
+      try { localStorage.setItem(PAT_STORAGE_KEY, token); } catch (e) {
+        console.error('saveUserPat:', e);
+      }
+    }
+    function removeUserPat() {
+      try { localStorage.removeItem(PAT_STORAGE_KEY); } catch {}
+    }
+    function maskPat(token) {
+      if (!token || token.length < 12) return '(אין)';
+      return token.slice(0, 10) + '…' + token.slice(-4);
+    }
+    function refreshTokenUI() {
+      const token = getUserPat();
+      const fab = document.getElementById('settingsFab');
+      const banner = document.getElementById('activeTokenBanner');
+      const clearBtn = document.getElementById('clearPatBtn');
+      if (token) {
+        fab.classList.add('token-active');
+        fab.title = `הגדרות — טוקן אישי פעיל (${maskPat(token)})`;
+        if (banner) banner.style.display = 'block';
+        if (clearBtn) clearBtn.style.display = 'block';
+      } else {
+        fab.classList.remove('token-active');
+        fab.title = 'הגדרות / חיבור GitHub';
+        if (banner) banner.style.display = 'none';
+        if (clearBtn) clearBtn.style.display = 'none';
+      }
+    }
+
+    function openSettingsModal() {
+      const input = document.getElementById('patInput');
+      input.value = ''; // never pre-populate — the token is hidden by design
+      document.getElementById('patStatus').className = 'pat-status';
+      document.getElementById('patStatus').textContent = '';
+      refreshTokenUI();
+      document.getElementById('settingsModal').classList.add('active');
+      setTimeout(() => input.focus(), 50);
+    }
+    function closeSettingsModal() {
+      document.getElementById('settingsModal').classList.remove('active');
+    }
+    function setPatStatus(kind, msg) {
+      const el = document.getElementById('patStatus');
+      el.className = 'pat-status ' + kind;
+      el.textContent = msg;
+    }
+
+    async function testAndSavePat() {
+      const input = document.getElementById('patInput');
+      const token = (input.value || '').trim();
+      if (!token) {
+        setPatStatus('error', '❌ הדבק קודם את הטוקן בשדה שלמעלה.');
+        return;
+      }
+      if (!PAT_PREFIX_RE.test(token)) {
+        setPatStatus('error', '❌ פורמט לא תקין. טוקן GitHub מתחיל ב-github_pat_ או ghp_');
+        return;
+      }
+      setPatStatus('info', '⏳ בודק מול GitHub Models...');
+      try {
+        const res = await fetch(`${BASE}/api/validate-github-token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          saveUserPat(token);
+          refreshTokenUI();
+          if (data.warning === 'rate_limited_but_valid') {
+            setPatStatus('success', '✅ הטוקן תקין (GitHub החזיר 429 — rate limit זמני, זה לא באג). נשמר!');
+          } else {
+            setPatStatus('success', '✅ הטוקן תקין ונשמר! התרגומים הבאים יצרכו מהמכסה שלך.');
+          }
+          input.value = '';
+        } else if (data.reason === 'bad_format') {
+          setPatStatus('error', '❌ פורמט הטוקן לא נראה כמו GitHub PAT.');
+        } else if (data.reason === 'unauthorized') {
+          setPatStatus('error', `❌ GitHub דחה את הטוקן (${data.status}). ודא שיצרת אותו עם הרשאת Models: Read.`);
+        } else if (data.reason === 'network_error') {
+          setPatStatus('error', '❌ שגיאת רשת בבדיקה: ' + (data.detail || 'unknown'));
+        } else {
+          setPatStatus('error', `❌ בדיקה נכשלה (${data.reason || 'unknown'}${data.status ? ' ' + data.status : ''}).`);
+        }
+      } catch (err) {
+        setPatStatus('error', '❌ בדיקה נכשלה: ' + err.message);
+      }
+    }
+
+    function clearPat() {
+      if (!confirm('לנתק את חשבון ה-GitHub שלך? התרגומים הבאים יחזרו להשתמש במכסה של השרת.')) return;
+      removeUserPat();
+      refreshTokenUI();
+      setPatStatus('info', 'ℹ️ הטוקן נמחק. התרגום הבא ישתמש במפתח השרת.');
+    }
+
     // ── Init ──
     document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('installUrl').textContent = `${BASE}/manifest.json`;
+      refreshTokenUI();
       await loadProviders();
       loadLibrary();
     });
@@ -932,9 +1250,15 @@
       if (uiBtn) { uiBtn.disabled = true; uiBtn.textContent = 'מתחיל...'; }
 
       try {
+        // Attach the viewer's personal GitHub PAT (if set) so the server
+        // uses it for GitHub Models instead of its own token — BYOK.
+        const userPat = getUserPat();
+        const genHeaders = { 'Content-Type': 'application/json' };
+        if (userPat) genHeaders['x-user-github-token'] = userPat;
+
         const genRes = await fetch(`${BASE}/api/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: genHeaders,
           body: JSON.stringify({
             imdbId, type, title, poster, year, season, episode, force,
             provider,
@@ -1064,8 +1388,8 @@
           showToast('🛑 התרגום בוטל');
           setTimeout(() => modal.classList.remove('active'), 2500);
         } else if (p.status === 'error') {
-          document.getElementById('modalIcon').textContent = '❌';
-          document.getElementById('modalTitle').textContent = 'שגיאה';
+          document.getElementById('modalIcon').textContent = p.tokenInvalid ? '🔑' : '❌';
+          document.getElementById('modalTitle').textContent = p.tokenInvalid ? 'בעיה בטוקן האישי' : 'שגיאה';
           document.getElementById('modalMessage').textContent = p.message;
           document.getElementById('modalProgressBar').style.width = '0%';
           document.getElementById('stopBtn').style.display = 'none';
@@ -1073,7 +1397,17 @@
           source.close();
           activeGen = null;
           pendingCtx = null;
-          setTimeout(() => modal.classList.remove('active'), 8000);
+          if (p.tokenInvalid) {
+            // Offer a direct jump back into settings so the user can fix it
+            // without hunting for the gear button.
+            setTimeout(() => {
+              modal.classList.remove('active');
+              showToast('🔑 פתח את ההגדרות כדי לעדכן את הטוקן');
+              openSettingsModal();
+            }, 2500);
+          } else {
+            setTimeout(() => modal.classList.remove('active'), 8000);
+          }
         }
       };
 
