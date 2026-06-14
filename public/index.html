@@ -450,6 +450,14 @@
       font-size: 0.85rem;
       color: var(--text-secondary);
     }
+    /* Manual upload button — visually set apart from download sources */
+    .source-btn-upload {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(139,92,246,0.12), var(--bg-card));
+    }
+    .source-btn-upload:hover:not(:disabled) {
+      box-shadow: 0 0 18px var(--accent-glow);
+    }
 
     /* Variant picker */
     .variant-list {
@@ -677,6 +685,8 @@
         <div class="source-list" id="sourceList">
           <div class="loading"><div class="spinner"></div><br>טוען מקורות...</div>
         </div>
+        <!-- Hidden file input for manual upload -->
+        <input type="file" id="uploadFileInput" accept=".srt,text/plain" style="display:none" onchange="handleUploadFile(event)">
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeSourceModal()">ביטול</button>
@@ -1128,9 +1138,17 @@
     // ── Source Picker Modal ──
     function openSourceModal() {
       const list = document.getElementById('sourceList');
-      list.innerHTML = '';
+      // Manual upload is always available, regardless of which download
+      // providers are configured.
+      const uploadBtnHtml = `
+        <button class="source-btn source-btn-upload" onclick="pickUploadSource()">
+          <div class="source-btn-name">⬆️ העלה קובץ משלך</div>
+          <div class="source-btn-desc">יש לך כבר תרגום עברי (SRT) במכשיר? העלה אותו ישירות לנגן — בלי תרגום AI</div>
+        </button>
+      `;
+      let providersHtml = '';
       if (!providers || providers.length === 0) {
-        list.innerHTML = '<div class="empty">לא הוגדרו מקורות. בדוק את קובץ .env</div>';
+        providersHtml = '<div class="empty" style="margin-top:8px;">לא הוגדרו מקורות להורדה. ניתן עדיין להעלות קובץ ידני למעלה.</div>';
       } else {
         providers.forEach(p => {
           const desc = p.name === 'opensubtitles'
@@ -1140,7 +1158,7 @@
               : 'מקור כתוביות';
           const disabledAttr = p.enabled ? '' : 'disabled';
           const disabledReason = p.enabled ? '' : '<div style="color:var(--warning);font-size:0.75rem;margin-top:4px;">⚠️ לא מוגדר מפתח API</div>';
-          list.innerHTML += `
+          providersHtml += `
             <button class="source-btn" ${disabledAttr} onclick="pickSource('${p.name}', '${p.displayName}')">
               <div class="source-btn-name">${p.displayName}</div>
               <div class="source-btn-desc">${desc}</div>
@@ -1149,7 +1167,64 @@
           `;
         });
       }
+      list.innerHTML = uploadBtnHtml + providersHtml;
       document.getElementById('sourceModal').classList.add('active');
+    }
+
+    // ── Manual upload flow ──
+    function pickUploadSource() {
+      if (!pendingCtx) return;
+      const input = document.getElementById('uploadFileInput');
+      input.value = ''; // reset so re-selecting the same file fires onchange
+      input.click();
+    }
+
+    async function handleUploadFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file || !pendingCtx) return;
+
+      if (!file.name.toLowerCase().endsWith('.srt')) {
+        showToast('❌ יש להעלות קובץ .srt בלבד');
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        showToast('❌ הקובץ גדול מדי (מקסימום 5MB)');
+        return;
+      }
+
+      const { imdbId, type, title, poster, year, season, episode } = pendingCtx;
+      const displayTitle = (type === 'tv' || type === 'series') && season && episode
+        ? `${title} (עונה ${season} פרק ${episode})`
+        : title;
+
+      let srt;
+      try {
+        srt = await file.text();
+      } catch (e) {
+        showToast('❌ שגיאה בקריאת הקובץ');
+        return;
+      }
+
+      document.getElementById('sourceModal').classList.remove('active');
+      showToast('⏳ מעלה כתובית...');
+
+      try {
+        const res = await fetch(`${BASE}/api/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imdbId, type, title, poster, year, season, episode, srt }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast('❌ ' + (data.error || 'ההעלאה נכשלה'));
+          return;
+        }
+        showToast(`✅ "${displayTitle}" הועלה בהצלחה (${data.blocks} שורות)`);
+        pendingCtx = null;
+        loadLibrary();
+      } catch (err) {
+        showToast('❌ ' + err.message);
+      }
     }
 
     function closeSourceModal() {

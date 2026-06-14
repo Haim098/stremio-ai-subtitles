@@ -15,7 +15,10 @@ const path = require('path');
 
 const SUBS_DIR = path.join(__dirname, 'public', 'subs');
 const DEFAULT_LEGACY_PROVIDER = 'opensubtitles';
-const KNOWN_PROVIDERS = ['opensubtitles', 'subdl'];
+// 'upload' is a pseudo-provider: there is nothing to search/download, but
+// manually-uploaded subtitles are stored & served through the same cache keys
+// (<title>_<lang>_upload.srt) so they coexist with downloaded translations.
+const KNOWN_PROVIDERS = ['opensubtitles', 'subdl', 'upload'];
 
 // Ensure subs directory exists
 if (!fs.existsSync(SUBS_DIR)) {

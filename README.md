@@ -9,6 +9,7 @@
 - ⚡ **Smart Caching** - Generated subtitles are cached to avoid redundant API calls
 - 🎯 **Auto-Detection** - Extracts title from filename for better subtitle quality
 - 📺 **Movies & Series** - Supports both movies and TV series (with season/episode context)
+- ⬆️ **Manual Upload** - Already have a Hebrew `.srt`? Upload it from the web UI for any title and it appears in the Stremio player alongside AI translations (no AI step)
 
 ## Supported Languages
 
@@ -65,6 +66,14 @@ npm start
 4. 📝 Gemini generates contextual dialogue and scene descriptions in the requested language
 5. 💾 The SRT file is cached for future requests
 6. ✅ Stremio displays the AI-generated subtitles as an option
+
+### Manual Upload
+
+In the web UI, search for a title and open the source picker. Besides the download
+sources you'll see **⬆️ העלה קובץ משלך** — pick a Hebrew `.srt` file from your
+device and it's validated, stored under the `upload` source, and served by the
+add-on in the player just like a generated translation. Re-uploading replaces the
+manual track for that title. SRT only (max 5 MB); VTT and other formats are rejected.
 
 ## 🚨 Important Note
 

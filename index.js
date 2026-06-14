@@ -84,13 +84,15 @@ builder.defineSubtitlesHandler(async function(args) {
   for (const v of variants) {
     const lang = config.SUPPORTED_LANGUAGES.find(l => l.code === v.lang);
     if (!lang) continue;
+    // Friendly source label — manual uploads get a Hebrew tag instead of "(upload)".
+    const sourceLabel = v.provider === UPLOAD_PROVIDER ? UPLOAD_PROVIDER_DISPLAY : v.provider;
     subtitles.push({
       // Include provider in the id so Stremio treats them as distinct tracks
       id: `aisub-${v.lang}-${v.provider}-${imdbId}`,
       url: `${baseUrl}/public/subs/${v.filename}`,
       lang: v.lang,
       // Some Stremio clients surface this label; ignored by others.
-      name: `${lang.displayName} (${v.provider})`,
+      name: `${lang.displayName} (${sourceLabel})`,
     });
   }
 
@@ -111,8 +113,15 @@ function extractInfo(id) {
 // ═══════════════════════════════════════════════════════════
 
 const app = express();
-app.use(express.json());
+// Raise the limit so manually-uploaded SRT files (sent as a JSON string field
+// to /api/upload) aren't truncated — the default ~100kb is too small for some
+// full-length subtitle files.
+app.use(express.json({ limit: '5mb' }));
 app.use('/public', express.static(publicDir));
+
+// ─── Manual upload pseudo-provider ───────────────────────
+const UPLOAD_PROVIDER = 'upload';
+const UPLOAD_PROVIDER_DISPLAY = 'העלאה ידנית';
 
 // ─── API: List subtitle providers ───────────────────────
 app.get('/api/providers', (req, res) => {
@@ -389,6 +398,67 @@ app.post('/api/generate', async (req, res) => {
       cancelRequests.delete(pkey);
     }
   })();
+});
+
+// ─── API: Upload a ready-made subtitle file (manual) ─────
+// The user already has a Hebrew SRT on their device; instead of downloading +
+// translating, they upload it here. It is stored under the 'upload' pseudo-
+// provider so the Stremio handler serves it alongside any AI translations.
+app.post('/api/upload', (req, res) => {
+  const { imdbId, type, title, poster, year, season, episode, srt } = req.body || {};
+
+  if (!imdbId) return res.status(400).json({ error: 'חסר מזהה תוכן (imdbId)' });
+  if (!srt || typeof srt !== 'string') {
+    return res.status(400).json({ error: 'חסר תוכן כתוביות' });
+  }
+
+  // Strip a leading UTF-8 BOM if present (common in Windows-exported files).
+  const content = srt.replace(/^﻿/, '');
+
+  // We only accept SRT. Reject WebVTT explicitly for a clearer message.
+  if (/^\s*WEBVTT/i.test(content)) {
+    return res.status(400).json({ error: 'קובץ VTT אינו נתמך — העלה קובץ SRT' });
+  }
+
+  const validation = srtParser.validate(content);
+  if (!validation.valid) {
+    return res.status(400).json({ error: `קובץ כתוביות לא תקין: ${validation.error || 'unknown'}` });
+  }
+
+  // Normalize: parse + rebuild so the stored file has clean indices and line
+  // endings regardless of how the source file was formatted.
+  const blocks = srtParser.parse(content);
+  const normalized = srtParser.build(blocks);
+
+  const isSeries = type === 'tv' || type === 'series';
+  const contentId = isSeries && season && episode ? `${imdbId}:${season}:${episode}` : imdbId;
+
+  const filename = cache.setCached(contentId, 'heb', normalized, contentId, UPLOAD_PROVIDER);
+
+  // Upsert one library row per (content, upload).
+  const library = loadLibrary();
+  const displayTitle = isSeries ? `${title || imdbId} (S${season}E${episode})` : (title || imdbId);
+  const entry = {
+    imdbId: contentId,
+    libraryKey: libraryKey(contentId, UPLOAD_PROVIDER),
+    title: displayTitle,
+    poster: poster || null,
+    year: year || '',
+    createdAt: new Date().toISOString(),
+    filename,
+    provider: UPLOAD_PROVIDER,
+    providerDisplayName: UPLOAD_PROVIDER_DISPLAY,
+    variantRelease: 'הועלה ידנית',
+  };
+  const idx = library.findIndex(e =>
+    e.libraryKey ? e.libraryKey === entry.libraryKey
+                 : (e.imdbId === contentId && e.provider === UPLOAD_PROVIDER)
+  );
+  if (idx >= 0) library[idx] = entry; else library.unshift(entry);
+  saveLibrary(library);
+
+  console.log(`[Upload] ✅ ${displayTitle} — manual subtitle stored (${blocks.length} blocks, ${normalized.length} bytes)`);
+  res.json({ status: 'done', filename, provider: UPLOAD_PROVIDER, blocks: blocks.length });
 });
 
 // ─── API: Validate a user-supplied GitHub Models PAT ──────
