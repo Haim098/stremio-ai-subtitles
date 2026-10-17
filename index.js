@@ -1,8 +1,9 @@
 /**
- * Stremio AI Subtitles Add-on v3.1
+ * Stremio AI Subtitles Add-on v3.2
  * ==================================
  * Web UI for subtitle generation + Cache-only Stremio handler.
  * v3.1: multi-provider subtitle sources (OpenSubtitles + SubDL).
+ * v3.2: optional Claude (Anthropic) translation with the user's own key.
  * Users pick a source, then a specific variant; each variant is
  * cached separately so multiple translations coexist per title.
  */
@@ -18,6 +19,7 @@ const { listProviders, getProvider, hasAnyEnabled } = require('./providers');
 const { translateAllTexts, CancelError } = require('./gemini');
 const srtParser = require('./srtParser');
 const cache = require('./subtitleCache');
+const anthropicEngine = require('./anthropic');
 
 // ─── Ensure directories ─────────────────────────────────
 const publicDir = path.join(__dirname, 'public');
@@ -267,6 +269,13 @@ app.post('/api/generate', async (req, res) => {
   const looksLikeGithubPat = /^(github_pat_|ghp_|ghu_|gho_|ghs_|ghr_)[A-Za-z0-9_]+$/.test(rawUserToken);
   const userGithubToken = looksLikeGithubPat ? rawUserToken : null;
 
+  // Viewer's own Anthropic key + chosen Claude model (optional BYOK). When
+  // present, the translation runs on Claude instead of GitHub Models/Gemini.
+  const rawAnthropicKey = (req.get('x-user-anthropic-key') || '').trim();
+  const userAnthropicKey = anthropicEngine.looksLikeAnthropicKey(rawAnthropicKey) ? rawAnthropicKey : null;
+  const rawAnthropicModel = (req.get('x-user-anthropic-model') || '').trim();
+  const userAnthropicModel = /^[A-Za-z0-9._:@\-]{1,100}$/.test(rawAnthropicModel) ? rawAnthropicModel : null;
+
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
   if (!providerName) return res.status(400).json({ error: 'Missing provider' });
   if (!variantId) return res.status(400).json({ error: 'Missing variantId' });
@@ -348,7 +357,7 @@ app.post('/api/generate', async (req, res) => {
         'heb',
         onProgress,
         checkCancelled,
-        { userGithubToken }
+        { userGithubToken, userAnthropicKey, userAnthropicModel }
       );
 
       // Step 4: Rebuild SRT
@@ -387,7 +396,7 @@ app.post('/api/generate', async (req, res) => {
         console.log(`[Generate] 🛑 Cancelled by user: ${pkey}`);
         progressStore[pkey] = { status: 'cancelled', message: 'התרגום בוטל על ידי המשתמש', provider: provider.name, logs: existingLogs() };
       } else if (err && err.userTokenInvalid) {
-        console.warn(`[Generate] 🔑 Invalid user PAT: ${pkey}`);
+        console.warn(`[Generate] 🔑 Invalid user token/key: ${pkey}`);
         progressStore[pkey] = { status: 'error', tokenInvalid: true, message: err.message, provider: provider.name, logs: existingLogs() };
       } else {
         console.error(`[Generate] ❌ ${pkey}:`, err.message);
@@ -501,6 +510,41 @@ app.post('/api/validate-github-token', async (req, res) => {
   }
 });
 
+// ─── API: Validate an Anthropic key + list its Claude models ──
+// Called from the Settings modal. Listing models costs no tokens and fails
+// with 401 on a bad key, so it doubles as validation. The key is not stored.
+app.post('/api/anthropic/models', async (req, res) => {
+  const key = ((req.body && req.body.key) || '').trim();
+  if (!key) return res.status(400).json({ ok: false, reason: 'missing_key' });
+  if (!anthropicEngine.looksLikeAnthropicKey(key)) return res.json({ ok: false, reason: 'bad_format' });
+
+  try {
+    const models = await anthropicEngine.listModels(key);
+    res.json({ ok: true, source: 'live', models, defaultModel: anthropicEngine.DEFAULT_MODEL });
+  } catch (err) {
+    const mapped = anthropicEngine.mapError(err);
+    if (mapped && mapped.userTokenInvalid) {
+      return res.json({ ok: false, reason: 'unauthorized', status: mapped.status });
+    }
+    // Couldn't reach the Models API (outage, 429, network). The key may well be
+    // fine, so hand back the built-in list of current models instead of
+    // blocking the user; the UI shows a warning that it isn't verified.
+    console.warn('[Anthropic] models list failed, using fallback list:', (mapped && mapped.message) || err.message);
+    return res.json({
+      ok: true,
+      source: 'fallback',
+      models: anthropicEngine.FALLBACK_MODELS,
+      defaultModel: anthropicEngine.DEFAULT_MODEL,
+      status: mapped && mapped.status,
+    });
+  }
+});
+
+// Built-in list of current models, so the picker isn't empty before a key is checked.
+app.get('/api/anthropic/models/defaults', (req, res) => {
+  res.json({ models: anthropicEngine.FALLBACK_MODELS, defaultModel: anthropicEngine.DEFAULT_MODEL });
+});
+
 // ─── API: Cancel an in-flight generation ───────────────
 app.post('/api/cancel', (req, res) => {
   const { imdbId, provider: providerName, season, episode } = req.body || {};
@@ -570,7 +614,7 @@ app.listen(config.PORT, () => {
   const aiEngine = config.GITHUB_TOKEN ? `GitHub Models (${config.GITHUB_MODELS_QUEUE.join(', ')})` : `Gemini (${config.GEMINI_MODEL})`;
   const providers = listProviders().map(p => `${p.displayName}${p.enabled ? '' : ' (disabled)'}`).join(', ');
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  🎬 Stremio AI Translated Subtitles v3.1');
+  console.log('  🎬 Stremio AI Translated Subtitles v3.2');
   console.log(`  📡 Translation: ${aiEngine}`);
   console.log(`  📥 Sources: ${providers}`);
   console.log('  🌐 Web UI: Enabled');

@@ -6,8 +6,10 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
+      # Secrets are never committed. Set GEMINI_API_KEY in the Render
+      # dashboard (Environment tab); "sync: false" makes Render ask for it.
       - key: GEMINI_API_KEY
-        value: AIzaSyDQLmPD2Rlyjk2NI4aEr_q1TUhs-wTPejI
+        sync: false
       - key: NODE_ENV
         value: production
       # Set this in the Render dashboard (Environment tab). The server

@@ -13,18 +13,30 @@
 const fetch = require('node-fetch');
 const config = require('./config');
 const srtParser = require('./srtParser');
+const anthropicEngine = require('./anthropic');
 
-// ─── State ──────────────────────────────────────────────
-let activeEngine = null;
-let activeGithubModelIndex = 0;
-let activeGithubModel = null;
-let currentOnProgress = null;
-let progressBatchTracker = 0;
-// When the caller (user-provided PAT flow) passes a token via translateAllTexts,
-// we stash it here so the per-batch HTTP call can use it instead of the
-// server's default config.GITHUB_TOKEN. Reset at the start of every run.
-let activeGithubToken = null;
-let activeGithubTokenSource = 'server'; // 'server' | 'user'
+// ─── Per-job state ──────────────────────────────────────
+// Everything that belongs to one translation run (which key, engine, model,
+// where logs go) lives in a context object created by translateAllTexts and
+// passed down explicitly. Never keep this in module-level variables: several
+// users can translate at the same time, and a shared variable would let one
+// job run on another user's key, model or progress window.
+function createJobContext(onProgress, options = {}) {
+  const githubToken = options.userGithubToken || null;
+  return {
+    engine: null,               // 'anthropic' | 'github' | 'gemini'
+    githubModelIndex: 0,
+    githubModel: null,
+    onProgress: onProgress || null,
+    batch: 0,
+    // Viewer's own GitHub PAT, used instead of config.GITHUB_TOKEN when set.
+    githubToken,
+    githubTokenSource: githubToken ? 'user' : 'server',
+    // Viewer's own Anthropic key + model: { client, model, displayName, ... }
+    // from anthropic.prepareJob(), or null.
+    anthropicJob: null,
+  };
+}
 
 // ─── Helpers ────────────────────────────────────────────
 function sleep(ms) {
@@ -58,10 +70,10 @@ async function interruptibleSleep(ms, shouldAbort) {
   }
 }
 
-function logToUI(msg) {
+function logToUI(ctx, msg) {
   console.warn(msg);
-  if (currentOnProgress) {
-    currentOnProgress({ status: 'translating', log: msg, batch: progressBatchTracker });
+  if (ctx.onProgress) {
+    ctx.onProgress({ status: 'translating', log: msg, batch: ctx.batch });
   }
 }
 
@@ -102,7 +114,7 @@ function buildUserPrompt(textLines) {
 }
 
 // ─── Response Parser ────────────────────────────────────
-function parseResponse(responseText, expectedCount) {
+function parseResponse(ctx, responseText, expectedCount) {
   const lines = responseText.trim().split('\n');
   const translations = new Array(expectedCount).fill('');
 
@@ -120,8 +132,8 @@ function parseResponse(responseText, expectedCount) {
   let filled = translations.filter(t => t.length > 0).length;
   if (filled < expectedCount * 0.7) {
     console.warn(`[AI] Only parsed ${filled}/${expectedCount}. Trying fallback...`);
-    if (currentOnProgress) {
-      currentOnProgress({ log: `⚠️ Parser only got ${filled}/${expectedCount} lines from model — trying loose fallback` });
+    if (ctx.onProgress) {
+      ctx.onProgress({ log: `⚠️ Parser only got ${filled}/${expectedCount} lines from model — trying loose fallback` });
     }
     const cleanLines = responseText.trim().split('\n').filter(l => l.trim().length > 0);
     if (cleanLines.length >= expectedCount) {
@@ -140,8 +152,8 @@ function parseResponse(responseText, expectedCount) {
   if (filled < expectedCount) {
     const dropped = expectedCount - filled;
     console.warn(`[AI] ⚠️ ${dropped}/${expectedCount} lines could not be parsed; will fall back to original English for those.`);
-    if (currentOnProgress) {
-      currentOnProgress({ log: `⚠️ ${dropped}/${expectedCount} lines unparseable — keeping originals` });
+    if (ctx.onProgress) {
+      ctx.onProgress({ log: `⚠️ ${dropped}/${expectedCount} lines unparseable — keeping originals` });
     }
   }
 
@@ -152,12 +164,12 @@ function parseResponse(responseText, expectedCount) {
 //  GitHub Models API (Primary)
 // ═══════════════════════════════════════════════════════
 
-async function translateBatchGitHub(textLines) {
-  const model = activeGithubModel || config.GITHUB_MODELS_QUEUE[0];
+async function translateBatchGitHub(ctx, textLines) {
+  const model = ctx.githubModel || config.GITHUB_MODELS_QUEUE[0];
   const url = `${config.GITHUB_MODELS_URL}/chat/completions`;
   // Prefer the user-supplied PAT (when present) so GitHub bills the user's
   // Models quota rather than the server's; fall back to server default.
-  const bearer = activeGithubToken || config.GITHUB_TOKEN;
+  const bearer = ctx.githubToken || config.GITHUB_TOKEN;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
 
@@ -201,7 +213,7 @@ async function translateBatchGitHub(textLines) {
       // 401/403 with a user-supplied token is almost certainly a bad or
       // expired PAT — surface it distinctly so the UI can tell the user
       // to re-authenticate, instead of silently falling back to Gemini.
-      if ((status === 401 || status === 403) && activeGithubTokenSource === 'user') {
+      if ((status === 401 || status === 403) && ctx.githubTokenSource === 'user') {
         throw {
           status,
           userTokenInvalid: true,
@@ -232,7 +244,7 @@ async function translateBatchGitHub(textLines) {
     const content = data.choices?.[0]?.message?.content;
     if (!content) throw { modelFailure: true, message: 'No content in GitHub response' };
 
-    return parseResponse(content, textLines.length);
+    return parseResponse(ctx, content, textLines.length);
   } finally {
     clearTimeout(timeout);
   }
@@ -242,7 +254,7 @@ async function translateBatchGitHub(textLines) {
 //  Gemini API (Fallback)
 // ═══════════════════════════════════════════════════════
 
-async function translateBatchGemini(textLines) {
+async function translateBatchGemini(ctx, textLines) {
   const prompt = `${getSystemPrompt()}\n\n${buildUserPrompt(textLines)}`;
   const url = `${config.GEMINI_API_URL}/${config.GEMINI_MODEL}:generateContent`;
 
@@ -272,23 +284,49 @@ async function translateBatchGemini(textLines) {
   const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!content) throw new Error('Invalid Gemini response');
 
-  return parseResponse(content, textLines.length);
+  return parseResponse(ctx, content, textLines.length);
+}
+
+// ═══════════════════════════════════════════════════════
+//  Anthropic Claude (user-supplied key)
+// ═══════════════════════════════════════════════════════
+
+async function translateBatchAnthropic(ctx, textLines) {
+  const content = await anthropicEngine.translateText(
+    ctx.anthropicJob,
+    getSystemPrompt(),
+    buildUserPrompt(textLines)
+  );
+  return parseResponse(ctx, content, textLines.length);
+}
+
+function runEngine(ctx, engine, textLines) {
+  if (engine === 'anthropic') return translateBatchAnthropic(ctx, textLines);
+  if (engine === 'github') return translateBatchGitHub(ctx, textLines);
+  return translateBatchGemini(ctx, textLines);
+}
+
+function currentModelLabel(ctx) {
+  if (ctx.engine === 'anthropic' && ctx.anthropicJob) return ctx.anthropicJob.displayName;
+  if (ctx.engine === 'gemini') return 'Gemini';
+  return ctx.githubModel || '?';
 }
 
 // ═══════════════════════════════════════════════════════
 //  Engine selection
 // ═══════════════════════════════════════════════════════
 
-function getEngine() {
+function getEngine(ctx) {
   // A user-supplied PAT unlocks the GitHub engine even if the server doesn't
   // have GITHUB_TOKEN configured — this is the whole point of BYOK.
-  const hasGithubAuth = !!(activeGithubToken || config.GITHUB_TOKEN);
-  if (!activeGithubModel && hasGithubAuth) {
-    activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
+  const hasGithubAuth = !!(ctx.githubToken || config.GITHUB_TOKEN);
+  if (!ctx.githubModel && hasGithubAuth) {
+    ctx.githubModel = config.GITHUB_MODELS_QUEUE[ctx.githubModelIndex];
   }
-  if (activeEngine) return activeEngine;
-  if (hasGithubAuth) return activeEngine = 'github';
-  if (config.GEMINI_API_KEY) return activeEngine = 'gemini';
+  if (ctx.engine) return ctx.engine;
+  if (ctx.anthropicJob) return ctx.engine = 'anthropic';
+  if (hasGithubAuth) return ctx.engine = 'github';
+  if (config.GEMINI_API_KEY) return ctx.engine = 'gemini';
   throw new Error('No AI API configured! Set GITHUB_TOKEN or GEMINI_API_KEY');
 }
 
@@ -296,22 +334,22 @@ function getEngine() {
  * Advance to the next GitHub model in the queue.
  * Returns true if a new model is available, false if queue is exhausted.
  */
-function advanceGithubModel(reason) {
-  activeGithubModelIndex++;
-  if (activeGithubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
-    activeGithubModel = config.GITHUB_MODELS_QUEUE[activeGithubModelIndex];
-    logToUI(`[AI] 🔄 Skipping failed model → now using: ${activeGithubModel} (reason: ${reason})`);
+function advanceGithubModel(ctx, reason) {
+  ctx.githubModelIndex++;
+  if (ctx.githubModelIndex < config.GITHUB_MODELS_QUEUE.length) {
+    ctx.githubModel = config.GITHUB_MODELS_QUEUE[ctx.githubModelIndex];
+    logToUI(ctx, `[AI] 🔄 Skipping failed model → now using: ${ctx.githubModel} (reason: ${reason})`);
     return true;
   }
   
   // All GitHub models exhausted — try Gemini
   if (config.GEMINI_API_KEY) {
-    logToUI('[AI] 🔄 All GitHub Models exhausted! Switching to Gemini engine.');
-    activeEngine = 'gemini';
+    logToUI(ctx, '[AI] 🔄 All GitHub Models exhausted! Switching to Gemini engine.');
+    ctx.engine = 'gemini';
     return true;
   }
   
-  logToUI('[AI] ❌ No models left in queue and no Gemini fallback configured!');
+  logToUI(ctx, '[AI] ❌ No models left in queue and no Gemini fallback configured!');
   return false;
 }
 
@@ -320,13 +358,8 @@ function advanceGithubModel(reason) {
 //  Direct single-attempt translate (used by content filter micro-batches)
 // ═══════════════════════════════════════════════════════
 
-async function translateBatchDirect(textLines) {
-  const engine = activeEngine || 'github';
-  if (engine === 'github') {
-    return await translateBatchGitHub(textLines);
-  } else {
-    return await translateBatchGemini(textLines);
-  }
+async function translateBatchDirect(ctx, textLines) {
+  return await runEngine(ctx, ctx.engine || 'github', textLines);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -334,17 +367,13 @@ async function translateBatchDirect(textLines) {
 // ═══════════════════════════════════════════════════════
 
 
-async function translateBatch(textLines) {
-  let engine = getEngine();
+async function translateBatch(ctx, textLines) {
+  let engine = getEngine(ctx);
   const MAX_ATTEMPTS = 8; // generous to allow model-switches within
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      if (engine === 'github') {
-        return await translateBatchGitHub(textLines);
-      } else {
-        return await translateBatchGemini(textLines);
-      }
+      return await runEngine(ctx, engine, textLines);
     } catch (error) {
 
       // ── User-supplied PAT is invalid/expired ──
@@ -352,21 +381,29 @@ async function translateBatch(textLines) {
       // so silently failing over to Gemini or the server token would defeat
       // the whole point. Surface a clear Hebrew message instead.
       if (error.userTokenInvalid) {
-        logToUI(`[AI] 🔑 ${error.message}`);
+        logToUI(ctx, `[AI] 🔑 ${error.message}`);
         const authErr = new Error(error.message);
         authErr.userTokenInvalid = true;
         throw authErr;
       }
 
+      // ── Unrecoverable error (e.g. Claude model unavailable, no credit) ──
+      // Every following batch would fail the same way, so stop the job and
+      // show the reason instead of returning untranslated English.
+      if (error.fatal) {
+        logToUI(ctx, `[AI] ❌ ${error.message}`);
+        throw new Error(error.message);
+      }
+
       // ── Model-level failure (400/401/403/404/500/empty) ──
       // Instantly skip to the next model — no retries on the same broken model
       if (error.modelFailure) {
-        logToUI(`[AI] ⚠️ Model failure on ${activeGithubModel}: ${error.message}`);
-        if (engine === 'github' && advanceGithubModel(error.message)) {
-          engine = activeEngine; // might have switched to 'gemini'
+        logToUI(ctx, `[AI] ⚠️ Model failure on ${ctx.githubModel}: ${error.message}`);
+        if (engine === 'github' && advanceGithubModel(ctx, error.message)) {
+          engine = ctx.engine; // might have switched to 'gemini'
           continue; // retry immediately with next model
         }
-        logToUI('[AI] ❌ All engines exhausted. Using original text for this batch.');
+        logToUI(ctx, '[AI] ❌ All engines exhausted. Using original text for this batch.');
         return textLines;
       }
 
@@ -376,16 +413,16 @@ async function translateBatch(textLines) {
         
         // Hard rate limit (>60s wait) → skip model
         if (delay > 60000) {
-          logToUI(`[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s). Skipping model...`);
-          if (engine === 'github' && advanceGithubModel('Hard rate limit ' + delay + 'ms')) {
-            engine = activeEngine;
+          logToUI(ctx, `[AI] 🚨 Hard rate limit (${Math.round(delay / 1000)}s). Skipping model...`);
+          if (engine === 'github' && advanceGithubModel(ctx, 'Hard rate limit ' + delay + 'ms')) {
+            engine = ctx.engine;
             continue;
           }
           return textLines;
         }
         
         // Soft rate limit — wait and retry same model
-        logToUI(`[AI] ⏳ Rate limited. Waiting ${Math.round(delay / 1000)}s (attempt ${attempt})...`);
+        logToUI(ctx, `[AI] ⏳ Rate limited. Waiting ${Math.round(delay / 1000)}s (attempt ${attempt})...`);
         await sleep(delay + 1000);
         continue;
       }
@@ -394,7 +431,7 @@ async function translateBatch(textLines) {
       if (error.contentFilter) {
         // If batch is already small (≤30 lines), give up on it
         if (textLines.length <= 30) {
-          logToUI(`[AI] ⚠️ Content filter blocked micro-batch (${textLines.length} lines). Using originals.`);
+          logToUI(ctx, `[AI] ⚠️ Content filter blocked micro-batch (${textLines.length} lines). Using originals.`);
           return textLines;
         }
         
@@ -405,16 +442,16 @@ async function translateBatch(textLines) {
           subBatches.push(textLines.slice(s, s + SUB_SIZE));
         }
         
-        logToUI(`[AI] 🔄 Content filter blocked ${textLines.length} lines. Splitting into ${subBatches.length} micro-batches of ~${SUB_SIZE}...`);
+        logToUI(ctx, `[AI] 🔄 Content filter blocked ${textLines.length} lines. Splitting into ${subBatches.length} micro-batches of ~${SUB_SIZE}...`);
         
         const allResults = [];
         for (let si = 0; si < subBatches.length; si++) {
           try {
-            logToUI(`[AI]   ↳ Micro-batch ${si + 1}/${subBatches.length} (${subBatches[si].length} lines)...`);
-            const subResult = await translateBatchDirect(subBatches[si]);
+            logToUI(ctx, `[AI]   ↳ Micro-batch ${si + 1}/${subBatches.length} (${subBatches[si].length} lines)...`);
+            const subResult = await translateBatchDirect(ctx, subBatches[si]);
             allResults.push(...subResult);
           } catch (subErr) {
-            logToUI(`[AI]   ↳ ⚠️ Micro-batch ${si + 1} also blocked. Keeping originals for these ${subBatches[si].length} lines.`);
+            logToUI(ctx, `[AI]   ↳ ⚠️ Micro-batch ${si + 1} also blocked. Keeping originals for these ${subBatches[si].length} lines.`);
             allResults.push(...subBatches[si]); // use originals for this sub-batch only
           }
           await sleep(1500); // small delay between micro-batches
@@ -425,15 +462,15 @@ async function translateBatch(textLines) {
       // ── Network / unknown error ──
       if (attempt >= 3) {
         // After 3 network failures, try next model instead of retrying forever
-        logToUI(`[AI] ⚠️ Network error x${attempt}: ${error.message}. Trying next model...`);
-        if (engine === 'github' && advanceGithubModel('Repeated network errors')) {
-          engine = activeEngine;
+        logToUI(ctx, `[AI] ⚠️ Network error x${attempt}: ${error.message}. Trying next model...`);
+        if (engine === 'github' && advanceGithubModel(ctx, 'Repeated network errors')) {
+          engine = ctx.engine;
           continue;
         }
         return textLines;
       }
       
-      logToUI(`[AI] ⚠️ Error attempt ${attempt}: ${error.message || 'unknown'}. Retrying in 3s...`);
+      logToUI(ctx, `[AI] ⚠️ Error attempt ${attempt}: ${error.message || 'unknown'}. Retrying in 3s...`);
       await sleep(3000);
     }
   }
@@ -456,15 +493,22 @@ async function translateBatch(textLines) {
  * @param {string} [options.userGithubToken] — when the viewer pasted their own
  *        GitHub Models PAT in the UI, pass it here so GitHub bills their
  *        personal quota instead of the server's. Omit to use config.GITHUB_TOKEN.
+ * @param {string} [options.userAnthropicKey] — viewer's own Anthropic API key.
+ *        When set, the whole job runs on Claude.
+ * @param {string} [options.userAnthropicModel] — Claude model id to use.
  */
 async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, options = {}) {
-  // Reset state for each new translation job
-  activeEngine = null;
-  activeGithubModelIndex = 0;
-  activeGithubModel = null;
-  currentOnProgress = onProgress;
-  activeGithubToken = options.userGithubToken || null;
-  activeGithubTokenSource = activeGithubToken ? 'user' : 'server';
+  // Fresh state for this job only — see createJobContext.
+  const ctx = createJobContext(onProgress, options);
+  if (options.userAnthropicKey) {
+    try {
+      ctx.anthropicJob = await anthropicEngine.prepareJob(options.userAnthropicKey, options.userAnthropicModel);
+    } catch (e) {
+      const err = new Error(e.message || 'Anthropic setup failed');
+      if (e.userTokenInvalid) err.userTokenInvalid = true;
+      throw err;
+    }
+  }
 
   // ── Flatten multi-line blocks so each physical line gets its own numbered
   //    prompt entry. Without this, dialog blocks like "- A\n- B" become a
@@ -472,20 +516,29 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
   //    by the response parser.
   const { flat: flatTexts, boundaries } = srtParser.flattenForTranslation(allTexts);
 
-  const engine = getEngine();
+  const engine = getEngine(ctx);
   const batchSize = config.TRANSLATION_BATCH_SIZE;
   const batchDelay = config.BATCH_DELAY_MS;
   const totalBatches = Math.ceil(flatTexts.length / batchSize);
   const allTranslated = [];
 
-  console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + activeGithubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
-  console.log(`[AI] Token source: ${activeGithubTokenSource}`);
-  console.log(`[AI] Model queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')} → Gemini`);
+  if (engine === 'anthropic') {
+    console.log(`[AI] Engine: Anthropic Claude (${ctx.anthropicJob.model}) — user key`);
+  } else {
+    console.log(`[AI] Engine: ${engine === 'github' ? 'GitHub Models (' + ctx.githubModel + ')' : 'Gemini (' + config.GEMINI_MODEL + ')'}`);
+    console.log(`[AI] Token source: ${ctx.githubTokenSource}`);
+    console.log(`[AI] Model queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')} → Gemini`);
+  }
   console.log(`[AI] Translating ${allTexts.length} blocks (${flatTexts.length} flat lines) in ${totalBatches} batches to ${targetLang}...`);
 
-  if (onProgress) onProgress({ log: `🚀 Starting with: ${activeGithubModel || config.GEMINI_MODEL} | Queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')}` });
-  if (activeGithubTokenSource === 'user' && onProgress) {
-    onProgress({ log: `🔑 Using your personal GitHub Models token (quota will be billed to your account)` });
+  if (engine === 'anthropic') {
+    if (onProgress) onProgress({ log: `🚀 Starting with Claude: ${ctx.anthropicJob.displayName} (${ctx.anthropicJob.model})` });
+    if (onProgress) onProgress({ log: `🔑 Using your personal Anthropic API key (usage will be billed to your account)` });
+  } else {
+    if (onProgress) onProgress({ log: `🚀 Starting with: ${ctx.githubModel || config.GEMINI_MODEL} | Queue: ${config.GITHUB_MODELS_QUEUE.join(' → ')}` });
+    if (ctx.githubTokenSource === 'user' && onProgress) {
+      onProgress({ log: `🔑 Using your personal GitHub Models token (quota will be billed to your account)` });
+    }
   }
   if (onProgress) onProgress({ batch: 0, totalBatches, status: 'translating', message: `מתרגם ${allTexts.length} שורות ב-${totalBatches} קבוצות...` });
 
@@ -494,16 +547,16 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
     // cheap win: no network call, instant stop.
     if (shouldAbort && shouldAbort()) throw new CancelError();
 
-    progressBatchTracker = i + 1;
+    ctx.batch = i + 1;
     const start = i * batchSize;
     const end = Math.min(start + batchSize, flatTexts.length);
     const batch = flatTexts.slice(start, end);
 
-    const currentModel = activeEngine === 'gemini' ? 'Gemini' : (activeGithubModel || '?');
+    const currentModel = currentModelLabel(ctx);
     console.log(`[AI]   Batch ${i + 1}/${totalBatches} (lines ${start + 1}-${end}) via ${currentModel}...`);
     if (onProgress) onProgress({ batch: i + 1, totalBatches, status: 'translating', message: `מתרגם קבוצה ${i + 1} מתוך ${totalBatches} (${currentModel})...` });
 
-    const translatedBatch = await translateBatch(batch);
+    const translatedBatch = await translateBatch(ctx, batch);
     allTranslated.push(...translatedBatch);
     console.log(`[AI]   ✅ Batch ${i + 1} done`);
 
@@ -531,4 +584,4 @@ async function translateAllTexts(allTexts, targetLang, onProgress, shouldAbort, 
   return unflattenedTranslations;
 }
 
-module.exports = { translateBatch, translateAllTexts, CancelError };
+module.exports = { translateAllTexts, CancelError };

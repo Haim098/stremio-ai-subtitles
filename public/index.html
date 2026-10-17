@@ -630,6 +630,30 @@
       text-align: right;
     }
 
+    .settings-section-title {
+      text-align: right;
+      font-size: 1.05rem;
+      margin: 22px 0 8px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+    .model-select {
+      width: 100%;
+      padding: 12px 14px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text-primary);
+      outline: none;
+      direction: ltr;
+      text-align: left;
+      margin-bottom: 12px;
+    }
+    .model-select:focus { border-color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+    .model-select option { background: var(--bg-secondary); }
+
     @media (max-width: 600px) {
       .header h1 { font-size: 2rem; }
       .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
@@ -640,7 +664,7 @@
 <body>
 
   <!-- Floating Settings button (BYOK PAT) -->
-  <button class="settings-fab" id="settingsFab" onclick="openSettingsModal()" title="הגדרות / חיבור GitHub">
+  <button class="settings-fab" id="settingsFab" onclick="openSettingsModal()" title="הגדרות תרגום">
     ⚙️
     <span class="badge-dot" title="טוקן אישי פעיל"></span>
   </button>
@@ -670,7 +694,7 @@
     </div>
 
     <div class="footer">
-      AI Translated Subtitles v3.1 — נתוני סרטים מ-
+      AI Translated Subtitles v3.2 — נתוני סרטים מ-
       <img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_short-8e7b30f73a4020692ccca9c88bafe5dcb6f8a62a4c6bc55cd9ba82bb2cd95f6c.svg" alt="TMDB">
       TMDB
     </div>
@@ -715,7 +739,8 @@
   <div class="modal-overlay" id="settingsModal">
     <div class="modal">
       <div class="modal-body">
-        <h3>⚙️ חיבור חשבון GitHub (אופציונלי)</h3>
+        <h3>⚙️ הגדרות תרגום</h3>
+        <h3 class="settings-section-title" style="border-top:none; padding-top:0; margin-top:12px;">🐙 חיבור חשבון GitHub (אופציונלי)</h3>
         <p class="progress-text" style="margin: 12px 0;">
           חבר את חשבון ה-GitHub שלך כדי שהתרגומים יצרכו מהמכסה האישית שלך
           ב-<strong>GitHub Models</strong> במקום מהמפתח של השרת.
@@ -757,14 +782,62 @@
                placeholder="github_pat_11ABCDEFGHIJK..." autocomplete="off" spellcheck="false">
 
         <div class="pat-status" id="patStatus"></div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-test"   onclick="testAndSavePat()" style="flex:1; min-width:140px;">🧪 בדוק ושמור</button>
+          <button class="btn btn-danger" onclick="clearPat()" id="clearPatBtn" style="flex:1; min-width:100px; display:none;">🗑️ נתק</button>
+        </div>
+
+        <!-- ── Anthropic Claude (BYOK) ── -->
+        <h3 class="settings-section-title">🤖 תרגום עם Claude של Anthropic (אופציונלי)</h3>
+        <p class="progress-text" style="margin: 8px 0 12px;">
+          הוסף מפתח API של Anthropic ובחר מודל — כל התרגומים הבאים ייעשו עם Claude,
+          והשימוש יחויב בחשבון ה-Anthropic שלך.
+        </p>
+
+        <div id="activeAnthropicBanner" class="active-token-banner" style="display:none;"></div>
+
+        <div class="onboarding-card">
+          <h4>📋 איך מקבלים מפתח:</h4>
+          <ol>
+            <li>
+              היכנס לקונסולה של Anthropic:<br>
+              <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">
+                🔗 פתח את דף מפתחות ה-API
+              </a>
+            </li>
+            <li>לחץ <code>Create Key</code>, תן לו שם ולחץ <code>Add</code></li>
+            <li>העתק את המפתח שמתחיל ב-<code>sk-ant-...</code> והדבק אותו כאן למטה 👇</li>
+          </ol>
+          <div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 8px;">
+            💡 המפתח נשמר רק בדפדפן שלך (localStorage) — השרת לא שומר אותו.
+            אחרי הבדיקה רשימת המודלים נשאבת ישירות מהחשבון שלך, כך שמודלים חדשים מופיעים אוטומטית.
+          </div>
+        </div>
+
+        <label style="display:block; text-align:right; margin-bottom:6px; font-size:0.9rem; color:var(--text-secondary);">
+          🔑 מפתח API של Anthropic:
+        </label>
+        <input type="password" class="pat-input" id="anthropicKeyInput"
+               placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false">
+
+        <label style="display:block; text-align:right; margin-bottom:6px; font-size:0.9rem; color:var(--text-secondary);">
+          🧠 מודל לתרגום:
+        </label>
+        <select class="model-select" id="anthropicModelSelect" onchange="onAnthropicModelChange()" disabled>
+          <option value="">— בדוק מפתח כדי לטעון מודלים —</option>
+        </select>
+
+        <div class="pat-status" id="anthropicStatus"></div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-test"   onclick="testAndSaveAnthropicKey()" style="flex:1; min-width:140px;">🧪 בדוק ושמור</button>
+          <button class="btn btn-danger" onclick="clearAnthropicKey()" id="clearAnthropicBtn" style="flex:1; min-width:100px; display:none;">🗑️ הסר</button>
+        </div>
       </div>
 
       <div class="modal-sticky-footer">
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button class="btn btn-test"      onclick="testAndSavePat()"  style="flex:1; min-width:140px;">🧪 בדוק ושמור</button>
-          <button class="btn btn-danger"    onclick="clearPat()"        id="clearPatBtn"  style="flex:1; min-width:100px; display:none;">🗑️ נתק</button>
-          <button class="btn btn-secondary" onclick="closeSettingsModal()" style="flex:1; min-width:100px;">סגור</button>
-        </div>
+        <button class="btn btn-secondary" onclick="closeSettingsModal()" style="width:100%;">סגור</button>
       </div>
     </div>
   </div>
@@ -837,16 +910,33 @@
       const banner = document.getElementById('activeTokenBanner');
       const clearBtn = document.getElementById('clearPatBtn');
       if (token) {
-        fab.classList.add('token-active');
-        fab.title = `הגדרות — טוקן אישי פעיל (${maskPat(token)})`;
         if (banner) banner.style.display = 'block';
         if (clearBtn) clearBtn.style.display = 'block';
       } else {
-        fab.classList.remove('token-active');
-        fab.title = 'הגדרות / חיבור GitHub';
         if (banner) banner.style.display = 'none';
         if (clearBtn) clearBtn.style.display = 'none';
       }
+
+      // Claude section
+      const aKey = getAnthropicKey();
+      const aModel = getAnthropicModel();
+      const aBanner = document.getElementById('activeAnthropicBanner');
+      const aClear = document.getElementById('clearAnthropicBtn');
+      if (aKey) {
+        aBanner.style.display = 'block';
+        aBanner.textContent = `✅ Claude פעיל — התרגום הבא ייעשה עם ${aModel || ANTHROPIC_DEFAULT_MODEL} (${maskPat(aKey)}).`;
+        aClear.style.display = 'block';
+      } else {
+        aBanner.style.display = 'none';
+        aClear.style.display = 'none';
+      }
+
+      // Gear badge: green dot when any personal key is active
+      const parts = [];
+      if (aKey) parts.push(`Claude (${aModel || ANTHROPIC_DEFAULT_MODEL})`);
+      if (token) parts.push(`GitHub (${maskPat(token)})`);
+      fab.classList.toggle('token-active', parts.length > 0);
+      fab.title = parts.length ? `הגדרות — פעיל: ${parts.join(', ')}` : 'הגדרות תרגום';
     }
 
     function openSettingsModal() {
@@ -854,9 +944,14 @@
       input.value = ''; // never pre-populate — the token is hidden by design
       document.getElementById('patStatus').className = 'pat-status';
       document.getElementById('patStatus').textContent = '';
+      document.getElementById('anthropicKeyInput').value = '';
+      document.getElementById('anthropicStatus').className = 'pat-status';
+      document.getElementById('anthropicStatus').textContent = '';
       refreshTokenUI();
       document.getElementById('settingsModal').classList.add('active');
-      setTimeout(() => input.focus(), 50);
+      // With a saved Claude key, load its model list so the user can switch model.
+      if (getAnthropicKey()) loadAnthropicModels(getAnthropicKey(), { silent: true });
+      else loadDefaultAnthropicModels();
     }
     function closeSettingsModal() {
       document.getElementById('settingsModal').classList.remove('active');
@@ -914,6 +1009,177 @@
       removeUserPat();
       refreshTokenUI();
       setPatStatus('info', 'ℹ️ הטוקן נמחק. התרגום הבא ישתמש במפתח השרת.');
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  Anthropic Claude BYOK — API key + model stored in localStorage
+    // ═══════════════════════════════════════════════════════
+    // Same model as the GitHub PAT: the key stays in the browser and is sent
+    // as a header (x-user-anthropic-key) only when starting a translation.
+    // When a key is saved, translations run on Claude with the chosen model.
+    const ANTHROPIC_KEY_STORAGE = 'ai_subs_anthropic_key';
+    const ANTHROPIC_MODEL_STORAGE = 'ai_subs_anthropic_model';
+    const ANTHROPIC_KEY_RE = /^sk-ant-[A-Za-z0-9_\-]+$/;
+    const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-5-5';
+
+    function getAnthropicKey() {
+      try { return localStorage.getItem(ANTHROPIC_KEY_STORAGE) || ''; } catch { return ''; }
+    }
+    function getAnthropicModel() {
+      try { return localStorage.getItem(ANTHROPIC_MODEL_STORAGE) || ''; } catch { return ''; }
+    }
+    function saveAnthropicSettings(key, model) {
+      try {
+        if (key) localStorage.setItem(ANTHROPIC_KEY_STORAGE, key);
+        if (model) localStorage.setItem(ANTHROPIC_MODEL_STORAGE, model);
+      } catch (e) { console.error('saveAnthropicSettings:', e); }
+    }
+    function removeAnthropicSettings() {
+      try {
+        localStorage.removeItem(ANTHROPIC_KEY_STORAGE);
+        localStorage.removeItem(ANTHROPIC_MODEL_STORAGE);
+      } catch {}
+    }
+    function setAnthropicStatus(kind, msg) {
+      const el = document.getElementById('anthropicStatus');
+      el.className = 'pat-status ' + kind;
+      el.textContent = msg;
+    }
+
+    // Short Hebrew hint per model line. Keyed by the API's `line` field, so a
+    // future "Claude Sonnet 6" gets the right hint automatically.
+    const LINE_HINTS = {
+      haiku: 'הכי זול ומהיר',
+      sonnet: 'מאוזן — מהיר ואיכותי',
+      opus: 'איכות גבוהה',
+      fable: 'הכי חזק — יקר ואיטי',
+    };
+
+    function modelLabel(m) {
+      const name = m.displayName || m.id;
+      const hint = m.recommended && m.line && LINE_HINTS[m.line] ? ` — ${LINE_HINTS[m.line]}` : '';
+      const dep = m.deprecated ? ' ⚠️ יוצא משימוש' : '';
+      return name + hint + dep;
+    }
+
+    // models come sorted newest-first from the server. Recommended (newest of
+    // each line) go in the top group, everything else below.
+    function fillModelSelect(models, selected) {
+      const select = document.getElementById('anthropicModelSelect');
+      select.innerHTML = '';
+      const groups = [
+        ['⭐ הדגמים העדכניים ביותר', models.filter(m => m.recommended)],
+        ['דגמים קודמים', models.filter(m => !m.recommended && !m.deprecated)],
+        ['⚠️ יוצאים משימוש', models.filter(m => !m.recommended && m.deprecated)],
+      ];
+      for (const [label, list] of groups) {
+        if (!list.length) continue;
+        const group = document.createElement('optgroup');
+        group.label = label;
+        for (const m of list) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = modelLabel(m);
+          opt.title = m.id;
+          group.appendChild(opt);
+        }
+        select.appendChild(group);
+      }
+      const ids = models.map(m => m.id);
+      select.value = ids.includes(selected) ? selected
+        : ids.includes(ANTHROPIC_DEFAULT_MODEL) ? ANTHROPIC_DEFAULT_MODEL
+        : (ids[0] || '');
+      select.disabled = models.length === 0;
+      return select.value;
+    }
+
+    // Before a key is checked, show the built-in list of current models so the
+    // user can already pick one; it's replaced by the key's live list on check.
+    async function loadDefaultAnthropicModels() {
+      try {
+        const res = await fetch(`${BASE}/api/anthropic/models/defaults`);
+        const data = await res.json();
+        fillModelSelect(data.models || [], getAnthropicModel());
+      } catch {}
+    }
+
+    // Fetch the models this key can use. Returns { models, source } or null.
+    async function loadAnthropicModels(key, { silent } = {}) {
+      if (!silent) setAnthropicStatus('info', '⏳ בודק את המפתח ושואב את רשימת המודלים מ-Anthropic...');
+      try {
+        const res = await fetch(`${BASE}/api/anthropic/models`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          fillModelSelect(data.models || [], getAnthropicModel());
+          if (data.source === 'fallback') {
+            setAnthropicStatus('error', `⚠️ לא הצלחתי לשאוב את רשימת המודלים מ-Anthropic${data.status ? ' (' + data.status + ')' : ''} — מוצגת רשימה מובנית של המודלים העדכניים. המפתח לא אומת.`);
+          }
+          return { models: data.models || [], source: data.source };
+        }
+        let msg;
+        if (data.reason === 'bad_format') msg = '❌ פורמט לא תקין. מפתח Anthropic מתחיל ב-sk-ant-';
+        else if (data.reason === 'unauthorized') msg = `❌ Anthropic דחו את המפתח (${data.status}). בדוק שהעתקת אותו נכון ושהוא פעיל.`;
+        else msg = `❌ בדיקה נכשלה (${data.reason || 'unknown'}${data.status ? ' ' + data.status : ''}). ${data.detail || ''}`;
+        setAnthropicStatus('error', msg);
+        return null;
+      } catch (err) {
+        setAnthropicStatus('error', '❌ בדיקה נכשלה: ' + err.message);
+        return null;
+      }
+    }
+
+    async function testAndSaveAnthropicKey() {
+      const input = document.getElementById('anthropicKeyInput');
+      // Allow "save" with an empty field when a key is already stored — this
+      // just re-checks it and saves the selected model.
+      const typed = (input.value || '').trim();
+      const key = typed || getAnthropicKey();
+      if (!key) {
+        setAnthropicStatus('error', '❌ הדבק קודם את המפתח בשדה שלמעלה.');
+        return;
+      }
+      if (!ANTHROPIC_KEY_RE.test(key)) {
+        setAnthropicStatus('error', '❌ פורמט לא תקין. מפתח Anthropic מתחיל ב-sk-ant-');
+        return;
+      }
+      const result = await loadAnthropicModels(key);
+      if (!result) return;
+      if (result.models.length === 0) {
+        setAnthropicStatus('error', '❌ המפתח תקין אבל אין לו גישה לאף מודל.');
+        return;
+      }
+      const model = document.getElementById('anthropicModelSelect').value;
+      saveAnthropicSettings(key, model);
+      input.value = '';
+      refreshTokenUI();
+      if (result.source === 'live') {
+        setAnthropicStatus('success', `✅ המפתח תקין ונשמר! נטענו ${result.models.length} מודלים מהחשבון שלך. התרגומים הבאים ייעשו עם ${model}.`);
+      } else {
+        setAnthropicStatus('error', `⚠️ המפתח נשמר בלי אימות (Anthropic לא זמינים כרגע). התרגומים ייעשו עם ${model}; אם המפתח שגוי תקבל הודעה בתחילת התרגום.`);
+      }
+    }
+
+    function onAnthropicModelChange() {
+      const model = document.getElementById('anthropicModelSelect').value;
+      // Only persist immediately when a key is already saved; otherwise the
+      // choice is saved together with the key on "בדוק ושמור".
+      if (getAnthropicKey() && model) {
+        saveAnthropicSettings(null, model);
+        refreshTokenUI();
+        setAnthropicStatus('success', `✅ המודל עודכן ל-${model}.`);
+      }
+    }
+
+    function clearAnthropicKey() {
+      if (!confirm('להסיר את מפתח ה-Anthropic? התרגומים הבאים יחזרו למנוע הרגיל.')) return;
+      removeAnthropicSettings();
+      loadDefaultAnthropicModels();
+      refreshTokenUI();
+      setAnthropicStatus('info', 'ℹ️ המפתח הוסר. התרגום הבא ישתמש במנוע הרגיל.');
     }
 
     // ── Init ──
@@ -1330,6 +1596,12 @@
         const userPat = getUserPat();
         const genHeaders = { 'Content-Type': 'application/json' };
         if (userPat) genHeaders['x-user-github-token'] = userPat;
+        // Claude BYOK: when a key is saved the server translates with Claude.
+        const anthropicKey = getAnthropicKey();
+        if (anthropicKey) {
+          genHeaders['x-user-anthropic-key'] = anthropicKey;
+          genHeaders['x-user-anthropic-model'] = getAnthropicModel() || ANTHROPIC_DEFAULT_MODEL;
+        }
 
         const genRes = await fetch(`${BASE}/api/generate`, {
           method: 'POST',
@@ -1464,7 +1736,7 @@
           setTimeout(() => modal.classList.remove('active'), 2500);
         } else if (p.status === 'error') {
           document.getElementById('modalIcon').textContent = p.tokenInvalid ? '🔑' : '❌';
-          document.getElementById('modalTitle').textContent = p.tokenInvalid ? 'בעיה בטוקן האישי' : 'שגיאה';
+          document.getElementById('modalTitle').textContent = p.tokenInvalid ? 'בעיה במפתח / בטוקן האישי' : 'שגיאה';
           document.getElementById('modalMessage').textContent = p.message;
           document.getElementById('modalProgressBar').style.width = '0%';
           document.getElementById('stopBtn').style.display = 'none';

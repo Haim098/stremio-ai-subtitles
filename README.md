@@ -50,12 +50,28 @@ npm start
 # http://localhost:7000/manifest.json
 ```
 
+## Translate with your own Claude key (Anthropic)
+
+Open the ⚙️ settings in the web UI, paste an Anthropic API key (`sk-ant-...`) and
+press **בדוק ושמור**. The key is checked against Anthropic and the dropdown is
+filled live from the Models API with the Claude models your key can use, so new
+models show up without a code change. The newest model of each line is listed
+first, older ones below, deprecated ones last (retired ones are hidden). Haiku is
+cheapest and fastest, Opus is the highest quality. If the model list can't be
+loaded (Anthropic outage), a built-in list of the current models is shown instead
+(`FALLBACK_MODELS` in `anthropic.js`). From then on every translation runs on Claude with
+that model and is billed to your Anthropic account.
+
+The key and model stay in your browser (localStorage); they're sent with each
+translation request and never stored on the server. Press **הסר** to go back to
+the default engine.
+
 ## Environment Variables
 
 | Variable              | Description                | Default                                |
 |----------------------|----------------------------|----------------------------------------|
 | `PORT`               | Server port                | `7000`                                 |
-| `GEMINI_API_KEY`     | Google Gemini API key      | (built-in key)                         |
+| `GEMINI_API_KEY`     | Google Gemini API key      | (none — set it in `.env` or Render)    |
 | `RENDER_EXTERNAL_URL`| Auto-set by Render.com     | -                                      |
 
 ## How It Works
