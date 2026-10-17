@@ -1,8 +1,9 @@
 /**
- * Stremio AI Subtitles Add-on v3.1
+ * Stremio AI Subtitles Add-on v3.2
  * ==================================
  * Web UI for subtitle generation + Cache-only Stremio handler.
  * v3.1: multi-provider subtitle sources (OpenSubtitles + SubDL).
+ * v3.2: optional Claude (Anthropic) translation with the user's own key.
  * Users pick a source, then a specific variant; each variant is
  * cached separately so multiple translations coexist per title.
  */
@@ -613,7 +614,7 @@ app.listen(config.PORT, () => {
   const aiEngine = config.GITHUB_TOKEN ? `GitHub Models (${config.GITHUB_MODELS_QUEUE.join(', ')})` : `Gemini (${config.GEMINI_MODEL})`;
   const providers = listProviders().map(p => `${p.displayName}${p.enabled ? '' : ' (disabled)'}`).join(', ');
   console.log('═══════════════════════════════════════════════════════════');
-  console.log('  🎬 Stremio AI Translated Subtitles v3.1');
+  console.log('  🎬 Stremio AI Translated Subtitles v3.2');
   console.log(`  📡 Translation: ${aiEngine}`);
   console.log(`  📥 Sources: ${providers}`);
   console.log('  🌐 Web UI: Enabled');

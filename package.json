@@ -1,7 +1,7 @@
 {
   "name": "stremio-ai-subtitles",
-  "version": "1.0.0",
-  "description": "Stremio add-on that generates AI-powered subtitles using Gemini 3 Flash Preview",
+  "version": "3.2.0",
+  "description": "Stremio add-on that translates subtitles to Hebrew with AI (GitHub Models, Gemini, or Claude with your own Anthropic key)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
