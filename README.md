@@ -50,6 +50,18 @@ npm start
 # http://localhost:7000/manifest.json
 ```
 
+## Translate with your own Claude key (Anthropic)
+
+Open the ⚙️ settings in the web UI, paste an Anthropic API key (`sk-ant-...`) and
+press **בדוק ושמור**. The key is checked against Anthropic and the dropdown fills
+with the Claude models your key can use — pick one (Haiku is cheapest and fastest,
+Opus is the highest quality). From then on every translation runs on Claude with
+that model and is billed to your Anthropic account.
+
+The key and model stay in your browser (localStorage); they're sent with each
+translation request and never stored on the server. Press **הסר** to go back to
+the default engine.
+
 ## Environment Variables
 
 | Variable              | Description                | Default                                |

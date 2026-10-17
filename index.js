@@ -18,6 +18,7 @@ const { listProviders, getProvider, hasAnyEnabled } = require('./providers');
 const { translateAllTexts, CancelError } = require('./gemini');
 const srtParser = require('./srtParser');
 const cache = require('./subtitleCache');
+const anthropicEngine = require('./anthropic');
 
 // ─── Ensure directories ─────────────────────────────────
 const publicDir = path.join(__dirname, 'public');
@@ -267,6 +268,13 @@ app.post('/api/generate', async (req, res) => {
   const looksLikeGithubPat = /^(github_pat_|ghp_|ghu_|gho_|ghs_|ghr_)[A-Za-z0-9_]+$/.test(rawUserToken);
   const userGithubToken = looksLikeGithubPat ? rawUserToken : null;
 
+  // Viewer's own Anthropic key + chosen Claude model (optional BYOK). When
+  // present, the translation runs on Claude instead of GitHub Models/Gemini.
+  const rawAnthropicKey = (req.get('x-user-anthropic-key') || '').trim();
+  const userAnthropicKey = anthropicEngine.looksLikeAnthropicKey(rawAnthropicKey) ? rawAnthropicKey : null;
+  const rawAnthropicModel = (req.get('x-user-anthropic-model') || '').trim();
+  const userAnthropicModel = /^[A-Za-z0-9._:@\-]{1,100}$/.test(rawAnthropicModel) ? rawAnthropicModel : null;
+
   if (!imdbId) return res.status(400).json({ error: 'Missing imdbId' });
   if (!providerName) return res.status(400).json({ error: 'Missing provider' });
   if (!variantId) return res.status(400).json({ error: 'Missing variantId' });
@@ -348,7 +356,7 @@ app.post('/api/generate', async (req, res) => {
         'heb',
         onProgress,
         checkCancelled,
-        { userGithubToken }
+        { userGithubToken, userAnthropicKey, userAnthropicModel }
       );
 
       // Step 4: Rebuild SRT
@@ -387,7 +395,7 @@ app.post('/api/generate', async (req, res) => {
         console.log(`[Generate] 🛑 Cancelled by user: ${pkey}`);
         progressStore[pkey] = { status: 'cancelled', message: 'התרגום בוטל על ידי המשתמש', provider: provider.name, logs: existingLogs() };
       } else if (err && err.userTokenInvalid) {
-        console.warn(`[Generate] 🔑 Invalid user PAT: ${pkey}`);
+        console.warn(`[Generate] 🔑 Invalid user token/key: ${pkey}`);
         progressStore[pkey] = { status: 'error', tokenInvalid: true, message: err.message, provider: provider.name, logs: existingLogs() };
       } else {
         console.error(`[Generate] ❌ ${pkey}:`, err.message);
@@ -498,6 +506,27 @@ app.post('/api/validate-github-token', async (req, res) => {
     return res.json({ ok: false, reason: 'upstream_error', status: r.status, detail: body.slice(0, 200) });
   } catch (err) {
     return res.json({ ok: false, reason: 'network_error', detail: err.message });
+  }
+});
+
+// ─── API: Validate an Anthropic key + list its Claude models ──
+// Called from the Settings modal. Listing models costs no tokens and fails
+// with 401 on a bad key, so it doubles as validation. The key is not stored.
+app.post('/api/anthropic/models', async (req, res) => {
+  const key = ((req.body && req.body.key) || '').trim();
+  if (!key) return res.status(400).json({ ok: false, reason: 'missing_key' });
+  if (!anthropicEngine.looksLikeAnthropicKey(key)) return res.json({ ok: false, reason: 'bad_format' });
+
+  try {
+    const models = await anthropicEngine.listModels(key);
+    res.json({ ok: true, models, defaultModel: anthropicEngine.DEFAULT_MODEL });
+  } catch (err) {
+    const mapped = anthropicEngine.mapError(err);
+    if (mapped && mapped.userTokenInvalid) {
+      return res.json({ ok: false, reason: 'unauthorized', status: mapped.status });
+    }
+    if (mapped && mapped.status === 429) return res.json({ ok: false, reason: 'rate_limited', status: 429 });
+    return res.json({ ok: false, reason: 'upstream_error', status: mapped && mapped.status, detail: String((mapped && mapped.message) || err.message || '').slice(0, 200) });
   }
 });
 
