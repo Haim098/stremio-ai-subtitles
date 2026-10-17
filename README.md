@@ -71,7 +71,7 @@ the default engine.
 | Variable              | Description                | Default                                |
 |----------------------|----------------------------|----------------------------------------|
 | `PORT`               | Server port                | `7000`                                 |
-| `GEMINI_API_KEY`     | Google Gemini API key      | (built-in key)                         |
+| `GEMINI_API_KEY`     | Google Gemini API key      | (none — set it in `.env` or Render)    |
 | `RENDER_EXTERNAL_URL`| Auto-set by Render.com     | -                                      |
 
 ## How It Works
