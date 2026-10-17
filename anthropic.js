@@ -17,6 +17,16 @@ const REQUEST_TIMEOUT_MS = 180000;
 // fallback support simply run alone.
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+// Shown when the live model list can't be loaded (network / Anthropic outage).
+// Newest model of each line per Anthropic's models overview (checked Oct 2026).
+// The live list from the user's key always wins when it loads.
+const FALLBACK_MODELS = [
+  { id: 'claude-opus-5-5',   displayName: 'Claude Opus 5.5',   line: 'opus',   recommended: true },
+  { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', line: 'sonnet', recommended: true },
+  { id: 'claude-haiku-5-5',  displayName: 'Claude Haiku 5.5',  line: 'haiku',  recommended: true },
+  { id: 'claude-fable-5-1',  displayName: 'Claude Fable 5.1',  line: 'fable',  recommended: true },
+];
+
 function looksLikeAnthropicKey(key) {
   return typeof key === 'string' && KEY_RE.test(key);
 }
@@ -34,12 +44,32 @@ function supportsEffort(info, level) {
 /**
  * List the models this key can use. Doubles as key validation: an invalid key
  * fails with 401, and listing models costs no tokens.
+ *
+ * Sorted newest first. The newest active model of each line (opus / sonnet /
+ * haiku / ...) is marked `recommended`; retired models are dropped and
+ * deprecated ones are flagged so the UI can push them to the bottom.
  */
 async function listModels(apiKey) {
   const client = createClient(apiKey);
   const models = [];
   for await (const m of client.models.list({ limit: 100 })) {
-    models.push({ id: m.id, displayName: m.display_name || m.id });
+    if (m.lifecycle === 'retired') continue;
+    models.push({
+      id: m.id,
+      displayName: m.display_name || m.id,
+      line: m.line || null,
+      createdAt: m.created_at || null,
+      deprecated: m.lifecycle === 'deprecated',
+      retiresAt: m.retires_at || null,
+    });
+  }
+  models.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const seenLines = new Set();
+  for (const m of models) {
+    m.recommended = false;
+    if (m.deprecated) continue;
+    const line = m.line || m.id; // a model with no line stands on its own
+    if (!seenLines.has(line)) { seenLines.add(line); m.recommended = !!m.line; }
   }
   return models;
 }
@@ -167,6 +197,7 @@ async function translateText(job, systemPrompt, userPrompt) {
 
 module.exports = {
   DEFAULT_MODEL,
+  FALLBACK_MODELS,
   looksLikeAnthropicKey,
   listModels,
   prepareJob,

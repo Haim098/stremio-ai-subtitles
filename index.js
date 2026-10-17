@@ -519,15 +519,29 @@ app.post('/api/anthropic/models', async (req, res) => {
 
   try {
     const models = await anthropicEngine.listModels(key);
-    res.json({ ok: true, models, defaultModel: anthropicEngine.DEFAULT_MODEL });
+    res.json({ ok: true, source: 'live', models, defaultModel: anthropicEngine.DEFAULT_MODEL });
   } catch (err) {
     const mapped = anthropicEngine.mapError(err);
     if (mapped && mapped.userTokenInvalid) {
       return res.json({ ok: false, reason: 'unauthorized', status: mapped.status });
     }
-    if (mapped && mapped.status === 429) return res.json({ ok: false, reason: 'rate_limited', status: 429 });
-    return res.json({ ok: false, reason: 'upstream_error', status: mapped && mapped.status, detail: String((mapped && mapped.message) || err.message || '').slice(0, 200) });
+    // Couldn't reach the Models API (outage, 429, network). The key may well be
+    // fine, so hand back the built-in list of current models instead of
+    // blocking the user; the UI shows a warning that it isn't verified.
+    console.warn('[Anthropic] models list failed, using fallback list:', (mapped && mapped.message) || err.message);
+    return res.json({
+      ok: true,
+      source: 'fallback',
+      models: anthropicEngine.FALLBACK_MODELS,
+      defaultModel: anthropicEngine.DEFAULT_MODEL,
+      status: mapped && mapped.status,
+    });
   }
+});
+
+// Built-in list of current models, so the picker isn't empty before a key is checked.
+app.get('/api/anthropic/models/defaults', (req, res) => {
+  res.json({ models: anthropicEngine.FALLBACK_MODELS, defaultModel: anthropicEngine.DEFAULT_MODEL });
 });
 
 // ─── API: Cancel an in-flight generation ───────────────

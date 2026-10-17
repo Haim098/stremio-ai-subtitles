@@ -811,7 +811,7 @@
           </ol>
           <div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 8px;">
             💡 המפתח נשמר רק בדפדפן שלך (localStorage) — השרת לא שומר אותו.
-            Haiku זול ומהיר, Sonnet מאוזן, Opus הכי איכותי ויקר יותר.
+            אחרי הבדיקה רשימת המודלים נשאבת ישירות מהחשבון שלך, כך שמודלים חדשים מופיעים אוטומטית.
           </div>
         </div>
 
@@ -951,6 +951,7 @@
       document.getElementById('settingsModal').classList.add('active');
       // With a saved Claude key, load its model list so the user can switch model.
       if (getAnthropicKey()) loadAnthropicModels(getAnthropicKey(), { silent: true });
+      else loadDefaultAnthropicModels();
     }
     function closeSettingsModal() {
       document.getElementById('settingsModal').classList.remove('active');
@@ -1045,15 +1046,44 @@
       el.textContent = msg;
     }
 
+    // Short Hebrew hint per model line. Keyed by the API's `line` field, so a
+    // future "Claude Sonnet 6" gets the right hint automatically.
+    const LINE_HINTS = {
+      haiku: 'הכי זול ומהיר',
+      sonnet: 'מאוזן — מהיר ואיכותי',
+      opus: 'איכות גבוהה',
+      fable: 'הכי חזק — יקר ואיטי',
+    };
+
+    function modelLabel(m) {
+      const name = m.displayName || m.id;
+      const hint = m.recommended && m.line && LINE_HINTS[m.line] ? ` — ${LINE_HINTS[m.line]}` : '';
+      const dep = m.deprecated ? ' ⚠️ יוצא משימוש' : '';
+      return name + hint + dep;
+    }
+
+    // models come sorted newest-first from the server. Recommended (newest of
+    // each line) go in the top group, everything else below.
     function fillModelSelect(models, selected) {
       const select = document.getElementById('anthropicModelSelect');
       select.innerHTML = '';
-      for (const m of models) {
-        const opt = document.createElement('option');
-        opt.value = m.id;
-        opt.textContent = m.displayName || m.id;
-        opt.title = m.id;
-        select.appendChild(opt);
+      const groups = [
+        ['⭐ הדגמים העדכניים ביותר', models.filter(m => m.recommended)],
+        ['דגמים קודמים', models.filter(m => !m.recommended && !m.deprecated)],
+        ['⚠️ יוצאים משימוש', models.filter(m => !m.recommended && m.deprecated)],
+      ];
+      for (const [label, list] of groups) {
+        if (!list.length) continue;
+        const group = document.createElement('optgroup');
+        group.label = label;
+        for (const m of list) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = modelLabel(m);
+          opt.title = m.id;
+          group.appendChild(opt);
+        }
+        select.appendChild(group);
       }
       const ids = models.map(m => m.id);
       select.value = ids.includes(selected) ? selected
@@ -1063,9 +1093,19 @@
       return select.value;
     }
 
-    // Fetch the models this key can use. Returns the model list or null.
+    // Before a key is checked, show the built-in list of current models so the
+    // user can already pick one; it's replaced by the key's live list on check.
+    async function loadDefaultAnthropicModels() {
+      try {
+        const res = await fetch(`${BASE}/api/anthropic/models/defaults`);
+        const data = await res.json();
+        fillModelSelect(data.models || [], getAnthropicModel());
+      } catch {}
+    }
+
+    // Fetch the models this key can use. Returns { models, source } or null.
     async function loadAnthropicModels(key, { silent } = {}) {
-      if (!silent) setAnthropicStatus('info', '⏳ בודק את המפתח מול Anthropic...');
+      if (!silent) setAnthropicStatus('info', '⏳ בודק את המפתח ושואב את רשימת המודלים מ-Anthropic...');
       try {
         const res = await fetch(`${BASE}/api/anthropic/models`, {
           method: 'POST',
@@ -1075,12 +1115,14 @@
         const data = await res.json();
         if (data.ok) {
           fillModelSelect(data.models || [], getAnthropicModel());
-          return data.models || [];
+          if (data.source === 'fallback') {
+            setAnthropicStatus('error', `⚠️ לא הצלחתי לשאוב את רשימת המודלים מ-Anthropic${data.status ? ' (' + data.status + ')' : ''} — מוצגת רשימה מובנית של המודלים העדכניים. המפתח לא אומת.`);
+          }
+          return { models: data.models || [], source: data.source };
         }
         let msg;
         if (data.reason === 'bad_format') msg = '❌ פורמט לא תקין. מפתח Anthropic מתחיל ב-sk-ant-';
         else if (data.reason === 'unauthorized') msg = `❌ Anthropic דחו את המפתח (${data.status}). בדוק שהעתקת אותו נכון ושהוא פעיל.`;
-        else if (data.reason === 'rate_limited') msg = '⚠️ Anthropic החזירו 429 (עומס זמני). נסה שוב בעוד רגע.';
         else msg = `❌ בדיקה נכשלה (${data.reason || 'unknown'}${data.status ? ' ' + data.status : ''}). ${data.detail || ''}`;
         setAnthropicStatus('error', msg);
         return null;
@@ -1104,9 +1146,9 @@
         setAnthropicStatus('error', '❌ פורמט לא תקין. מפתח Anthropic מתחיל ב-sk-ant-');
         return;
       }
-      const models = await loadAnthropicModels(key);
-      if (!models) return;
-      if (models.length === 0) {
+      const result = await loadAnthropicModels(key);
+      if (!result) return;
+      if (result.models.length === 0) {
         setAnthropicStatus('error', '❌ המפתח תקין אבל אין לו גישה לאף מודל.');
         return;
       }
@@ -1114,7 +1156,11 @@
       saveAnthropicSettings(key, model);
       input.value = '';
       refreshTokenUI();
-      setAnthropicStatus('success', `✅ המפתח תקין ונשמר! התרגומים הבאים ייעשו עם ${model}.`);
+      if (result.source === 'live') {
+        setAnthropicStatus('success', `✅ המפתח תקין ונשמר! נטענו ${result.models.length} מודלים מהחשבון שלך. התרגומים הבאים ייעשו עם ${model}.`);
+      } else {
+        setAnthropicStatus('error', `⚠️ המפתח נשמר בלי אימות (Anthropic לא זמינים כרגע). התרגומים ייעשו עם ${model}; אם המפתח שגוי תקבל הודעה בתחילת התרגום.`);
+      }
     }
 
     function onAnthropicModelChange() {
@@ -1131,8 +1177,7 @@
     function clearAnthropicKey() {
       if (!confirm('להסיר את מפתח ה-Anthropic? התרגומים הבאים יחזרו למנוע הרגיל.')) return;
       removeAnthropicSettings();
-      fillModelSelect([], '');
-      document.getElementById('anthropicModelSelect').innerHTML = '<option value="">— בדוק מפתח כדי לטעון מודלים —</option>';
+      loadDefaultAnthropicModels();
       refreshTokenUI();
       setAnthropicStatus('info', 'ℹ️ המפתח הוסר. התרגום הבא ישתמש במנוע הרגיל.');
     }
